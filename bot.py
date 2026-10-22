@@ -1,5 +1,8 @@
 import os
 import requests
+import datetime
+import jdatetime
+import re
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -7,7 +10,18 @@ TOKEN = os.getenv("BOT_TOKEN")
 TOP_COINS = ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK"]
 TRENDING_COINS = ["SOL", "PEPE", "DOGE", "WIF", "AVAX", "TON", "SHIB", "BONK", "FLOKI", "NOT"]
 
-def fetch_wallex_prices():
+# حافظه برای زبان و هشدارها
+user_lang = {}
+user_alerts = {}
+
+def get_time_str(chat_id):
+    tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
+    now = datetime.datetime.now(tehran_tz)
+    if user_lang.get(chat_id, 'fa') == 'fa':
+        return f"{jdatetime.date.fromgregorian(date=now.date()).strftime('%Y/%m/%d')} - {now.strftime('%H:%M:%S')}"
+    return now.strftime("%Y-%m-%d - %H:%M:%S")
+
+def fetch_prices():
     prices = {}
     try:
         res = requests.get("https://api.wallex.ir/v1/markets", timeout=10).json()
@@ -21,24 +35,20 @@ def fetch_wallex_prices():
     except: pass
     return prices
 
-def get_okx_price(symbol):
+def get_okx(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT"
-        res = requests.get(url, timeout=8).json()
+        res = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT", timeout=8).json()
         if res.get('code') == '0' and res.get('data'):
-            data = res['data'][0]
-            price = float(data['last'])
-            open_p = float(data['open24h'])
-            change = ((price - open_p) / open_p) * 100 if open_p > 0 else 0
-            return {'price': price, 'change': change}
+            d = res['data'][0]
+            p = float(d['last'])
+            o = float(d['open24h'])
+            return {'price': p, 'change': ((p - o) / o) * 100 if o > 0 else 0}
     except: pass
     return None
 
 def get_rsi(symbol):
-    """محاسبه شاخص RSI از کندل‌های ۱ ساعته OKX"""
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar=1H&limit=50"
-        res = requests.get(url, timeout=8).json()
+        res = requests.get(f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar=1H&limit=50", timeout=8).json()
         if res.get('code') == '0' and len(res.get('data', [])) >= 14:
             closes = [float(c[4]) for c in reversed(res['data'])]
             g, l = 0, 0
@@ -51,65 +61,156 @@ def get_rsi(symbol):
     except: pass
     return None
 
+async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
+    if not user_alerts: return
+    prices = fetch_prices()
+    for chat_id, alerts in list(user_alerts.items()):
+        lang = user_lang.get(chat_id, 'fa')
+        for a in alerts[:]:
+            data = prices.get(a['symbol']) or get_okx(a['symbol'])
+            if not data: continue
+            cp = data['price']
+            if (a['direction'] == 'above' and cp >= a['target']) or (a['direction'] == 'below' and cp <= a['target']):
+                msg = f"🚨 هشدار: {a['symbol']} به هدف رسید!\nقیمت: ${cp:,.2f}" if lang == 'fa' else f"🚨 Alert: {a['symbol']} reached target!\nPrice: ${cp:,.2f}"
+                try: await context.bot.send_message(chat_id, msg)
+                except: pass
+                user_alerts[chat_id].remove(a)
+        if not user_alerts[chat_id]: del user_alerts[chat_id]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+    chat_id = update.effective_chat.id
+    user_lang[chat_id] = 'fa'
+    kb = [
         [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("۱۰ ترند برتر 🔥")],
-        [KeyboardButton("ریست 🔄")]
+        [KeyboardButton("تنظیم هشدار 🔔"), KeyboardButton("تغییر زبان 🇬🇧")],
+        [KeyboardButton("راهنما ❓"), KeyboardButton("ریست 🔄")]
     ]
-    await update.message.reply_text(
-        "سلام! 🚀\nحالا دکمه‌های تحلیل و ترند را تست کنید:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
+    await update.message.reply_text("سلام! 🚀\nیک گزینه انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+
+async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if user_lang.get(chat_id, 'fa') == 'fa':
+        user_lang[chat_id] = 'en'
+        kb = [
+            [KeyboardButton("Top 10 Coins 📊"), KeyboardButton("Top 10 Trending 🔥")],
+            [KeyboardButton("Set Alert 🔔"), KeyboardButton("Change Language 🇮🇷")],
+            [KeyboardButton("Help ❓"), KeyboardButton("Reset 🔄")]
+        ]
+        await update.message.reply_text("Language changed to English.", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+    else:
+        user_lang[chat_id] = 'fa'
+        kb = [
+            [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("۱۰ ترند برتر 🔥")],
+            [KeyboardButton("تنظیم هشدار 🔔"), KeyboardButton("تغییر زبان 🇬🇧")],
+            [KeyboardButton("راهنما ❓"), KeyboardButton("ریست 🔄")]
+        ]
+        await update.message.reply_text("زبان به فارسی تغییر کرد.", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
 async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ در حال تحلیل بازار...")
-    wallex_prices = fetch_wallex_prices()
-    
-    text = "<b>📊 ۱۰ ارز برتر و تحلیل RSI</b>\n\n"
-    for coin in TOP_COINS:
-        data = wallex_prices.get(coin) or get_okx_price(coin)
-        if not data: continue
-        
-        rsi = get_rsi(coin)
+    chat_id = update.effective_chat.id
+    lang = user_lang.get(chat_id, 'fa')
+    msg = await update.message.reply_text("⏳ ...")
+    prices = fetch_prices()
+    text = f"<b>📊 {'۱۰ ارز برتر' if lang=='fa' else 'Top 10 Coins'}</b>\n🕒 {get_time_str(chat_id)}\n\n"
+    for c in TOP_COINS:
+        d = prices.get(c) or get_okx(c)
+        if not d: continue
+        rsi = get_rsi(c)
         if rsi:
-            if rsi > 70: rsi_txt = f"⚠️ اشباع خرید ({rsi})"
-            elif rsi < 30: rsi_txt = f"🟢 اشباع فروش ({rsi})"
-            else: rsi_txt = f"⚖️ خنثی ({rsi})"
+            if lang == 'fa':
+                rsi_txt = f"⚠️ اشباع خرید ({rsi})" if rsi > 70 else (f"🟢 اشباع فروش ({rsi})" if rsi < 30 else f"⚖️ خنثی ({rsi})")
+            else:
+                rsi_txt = f"⚠️ Overbought ({rsi})" if rsi > 70 else (f"🟢 Oversold ({rsi})" if rsi < 30 else f"⚖️ Neutral ({rsi})")
         else: rsi_txt = "N/A"
         
-        icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
-        text += f"<b>{coin}</b> {icon}\n💰 قیمت: ${data['price']:,.2f}\n📊 تغییر: {data['change']:+.2f}%\n📈 تحلیل: {rsi_txt}\n➖➖➖➖➖➖\n"
-        
+        icon = "🟢" if d['change'] > 0 else "🔴"
+        if lang == 'fa':
+            text += f"<b>{c}</b> {icon}\n💰 قیمت: ${d['price']:,.2f}\n📊 تغییر: {d['change']:+.2f}%\n📈 تحلیل: {rsi_txt}\n➖➖➖➖➖➖\n"
+        else:
+            text += f"<b>{c}</b> {icon}\n💰 Price: ${d['price']:,.2f}\n📊 Change: {d['change']:+.2f}%\n📈 RSI: {rsi_txt}\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
 
 async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ در حال دریافت ترندها...")
-    wallex_prices = fetch_wallex_prices()
-    
-    text = "<b>🔥 ۱۰ ارز پرطرفدار</b>\n\n"
-    count = 0
-    for symbol in TRENDING_COINS:
-        if count >= 10: break
-        data = wallex_prices.get(symbol) or get_okx_price(symbol)
-        if data:
-            count += 1
-            icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
-            text += f"<b>{symbol}</b> {icon}\n💰 قیمت: ${data['price']:,.2f}\n📊 تغییر: {data['change']:+.2f}%\n➖➖➖➖➖➖\n"
-            
+    chat_id = update.effective_chat.id
+    lang = user_lang.get(chat_id, 'fa')
+    msg = await update.message.reply_text("⏳ ...")
+    prices = fetch_prices()
+    text = f"<b>🔥 {'۱۰ ترند برتر' if lang=='fa' else 'Top 10 Trending'}</b>\n🕒 {get_time_str(chat_id)}\n\n"
+    cnt = 0
+    for c in TRENDING_COINS:
+        if cnt >= 10: break
+        d = prices.get(c) or get_okx(c)
+        if d:
+            cnt += 1
+            icon = "🟢" if d['change'] > 0 else "🔴"
+            if lang == 'fa':
+                text += f"<b>{c}</b> {icon}\n💰 قیمت: ${d['price']:,.2f}\n📊 تغییر: {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
+            else:
+                text += f"<b>{c}</b> {icon}\n💰 Price: ${d['price']:,.2f}\n📊 Change: {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = update.message.text
-    if "۱۰ ارز برتر" in txt: 
-        await top10(update, context)
-    elif "ترند" in txt: 
-        await trending(update, context)
-    elif "ریست" in txt: 
-        await update.message.reply_text("منو بسته شد.", reply_markup=ReplyKeyboardRemove())
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    lang = user_lang.get(chat_id, 'fa')
+    text = "ℹ️ راهنما:\n🔔 هشدار: <code>alert BTC 85000 above</code>\n💱 تبدیل: <code>0.5 BTC</code>\n🔍 جستجو: <code>TON</code>" if lang=='fa' else "ℹ️ Help:\n🔔 Alert: <code>alert BTC 85000 above</code>\n💱 Convert: <code>0.5 BTC</code>\n🔍 Search: <code>TON</code>"
+    await update.message.reply_text(text, parse_mode='HTML')
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text.strip()
+    up = txt.upper()
+    chat_id = update.effective_chat.id
+    lang = user_lang.get(chat_id, 'fa')
+    
+    # هشدار قیمت
+    if up.startswith("ALERT"):
+        parts = txt.split()
+        if len(parts) == 4:
+            try:
+                sym, tgt, drc = parts[1].upper(), float(parts[2]), parts[3].lower()
+                if drc in ['above', 'below']:
+                    if chat_id not in user_alerts: user_alerts[chat_id] = []
+                    user_alerts[chat_id] = [a for a in user_alerts[chat_id] if a['symbol'] != sym]
+                    user_alerts[chat_id].append({'symbol': sym, 'target': tgt, 'direction': drc})
+                    msg = f"✅ هشدار {sym} تنظیم شد." if lang == 'fa' else f"✅ Alert for {sym} set."
+                    await update.message.reply_text(msg)
+                    return
+            except: pass
+        return await update.message.reply_text("❌ فرمت اشتباه: <code>alert BTC 85000 above</code>", parse_mode='HTML')
+
+    # تبدیل ارز
+    conv = re.match(r"^([\d\.]+)\s*([A-Z]{2,10})$", up)
+    if conv:
+        amt, sym = float(conv.group(1)), conv.group(2)
+        d = fetch_prices().get(sym) or get_okx(sym)
+        if d:
+            msg = f"💱 {amt} {sym} = <b>${amt * d['price']:,.2f}</b>" if lang == 'en' else f"💱 {amt} {sym} معادل <b>${amt * d['price']:,.2f}</b> است."
+            return await update.message.reply_text(msg, parse_mode='HTML')
+        
+    # جستجوی ارز
+    if re.match(r"^[A-Z0-9]{2,10}$", up):
+        msg = await update.message.reply_text("⏳ ...")
+        d = fetch_prices().get(up) or get_okx(up)
+        if d:
+            if lang == 'fa':
+                return await msg.edit_text(f"<b>🔍 {up}</b>\n💰 قیمت: ${d['price']:,.4f}\n📊 تغییر: {d['change']:+.2f}%", parse_mode='HTML')
+            else:
+                return await msg.edit_text(f"<b>🔍 {up}</b>\n💰 Price: ${d['price']:,.4f}\n📊 Change: {d['change']:+.2f}%", parse_mode='HTML')
+        return await msg.edit_text("❌ یافت نشد. / Not found.")
+
+    # مدیریت دکمه‌ها
+    if "۱۰ ارز برتر" in txt or "Top 10 Coins" in txt: await top10(update, context)
+    elif "ترند" in txt or "Trending" in txt: await trending(update, context)
+    elif "هشدار" in txt or "Alert" in txt: 
+        msg = "دستور: <code>alert BTC 85000 above</code>" if lang=='fa' else "Command: <code>alert BTC 85000 above</code>"
+        await update.message.reply_text(msg, parse_mode='HTML')
+    elif "راهنما" in txt or "Help" in txt: await help_cmd(update, context)
+    elif "زبان" in txt or "Language" in txt: await change_lang(update, context)
+    elif "ریست" in txt or "Reset" in txt: await update.message.reply_text("منو بسته شد.", reply_markup=ReplyKeyboardRemove())
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
+    app.job_queue.run_repeating(check_alerts, interval=300, first=10)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("✅ ربات روشن شد!")
     app.run_polling(drop_pending_updates=True)

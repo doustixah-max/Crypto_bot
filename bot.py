@@ -3,6 +3,7 @@ import requests
 import datetime
 import jdatetime
 import re
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -47,22 +48,18 @@ def get_okx(symbol):
     return None
 
 def get_klines(symbol, timeframe='1H', limit=100):
-    """دریافت کندل‌ها برای محاسبه اندیکاتورها"""
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
         if res.get('code') == '0' and res.get('data'):
-            # داده‌ها به صورت [timestamp, open, high, low, close, vol, ...] هستند
-            return [float(c[4]) for c in reversed(res['data'])] # فقط Close را برمی‌گردانیم
+            return [float(c[4]) for c in reversed(res['data'])]
     except: pass
     return []
 
 def calculate_indicators(closes):
-    """محاسبه RSI، Bollinger Bands، EMA و ADX"""
     if len(closes) < 50: return None
     results = {}
     
-    # 1. RSI (14)
     period_rsi = 14
     gains, losses = 0, 0
     for i in range(len(closes) - period_rsi, len(closes)):
@@ -74,7 +71,6 @@ def calculate_indicators(closes):
     rs = avg_gain / avg_loss if avg_loss > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # 2. Bollinger Bands (20, 2)
     period_bb = 20
     recent_closes = closes[-period_bb:]
     sma = sum(recent_closes) / period_bb
@@ -84,7 +80,6 @@ def calculate_indicators(closes):
     results['bb_lower'] = round(sma - (2 * std_dev), 6)
     results['bb_mid'] = round(sma, 6)
     
-    # 3. EMA (20)
     period_ema = 20
     multiplier = 2 / (period_ema + 1)
     ema = closes[0]
@@ -92,15 +87,13 @@ def calculate_indicators(closes):
         ema = (price - ema) * multiplier + ema
     results['ema'] = round(ema, 6)
     
-    # 4. ADX (14) - ساده‌شده برای محاسبه قدرت روند
-    # (برای سادگی، از تغییرات قیمت به عنوان معیار قدرت استفاده می‌کنیم)
     trs = []
     for i in range(1, len(closes)):
         tr = abs(closes[i] - closes[i-1])
         trs.append(tr)
     avg_tr = sum(trs[-14:]) / 14
     price_change = abs(closes[-1] - closes[-14])
-    results['adx'] = round((price_change / avg_tr) * 10 if avg_tr > 0 else 0, 2) # شبیه‌سازی
+    results['adx'] = round((price_change / avg_tr) * 10 if avg_tr > 0 else 0, 2)
     
     return results
 
@@ -138,7 +131,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("۱۰ ترند برتر 🔥")],
         [KeyboardButton("تحلیل پیشرفته 📈"), KeyboardButton("مدیریت هشدارها 🔔")],
-        [KeyboardButton("تغییر زبان 🇬🇧"), KeyboardButton("ریست 🔄")]
+        [KeyboardButton("درباره سازنده 👨‍💻"), KeyboardButton("تغییر زبان 🇬🇧")],
+        [KeyboardButton("ریست 🔄")]
     ]
     await update.message.reply_text("سلام! 🚀\nبه ربات حرفه‌ای قیمت‌یاب خوش آمدید.\nیک گزینه انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
@@ -149,7 +143,8 @@ async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = [
             [KeyboardButton("Top 10 Coins 📊"), KeyboardButton("Top 10 Trending 🔥")],
             [KeyboardButton("Advanced Analysis 📈"), KeyboardButton("Manage Alerts 🔔")],
-            [KeyboardButton("Change Language 🇮🇷"), KeyboardButton("Reset 🔄")]
+            [KeyboardButton("About Developer 👨‍💻"), KeyboardButton("Change Language 🇮🇷")],
+            [KeyboardButton("Reset 🔄")]
         ]
         await update.message.reply_text("Language changed to English.", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
     else:
@@ -157,16 +152,46 @@ async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = [
             [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("۱۰ ترند برتر 🔥")],
             [KeyboardButton("تحلیل پیشرفته 📈"), KeyboardButton("مدیریت هشدارها 🔔")],
-            [KeyboardButton("تغییر زبان 🇬🇧"), KeyboardButton("ریست 🔄")]
+            [KeyboardButton("درباره سازنده 👨‍💻"), KeyboardButton("تغییر زبان 🇬🇧")],
+            [KeyboardButton("ریست 🔄")]
         ]
         await update.message.reply_text("زبان به فارسی تغییر کرد.", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+
+async def about_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    lang = user_lang.get(chat_id, 'fa')
+    
+    if lang == 'fa':
+        text = (
+            "👨‍💻 <b>درباره سازنده</b>\n\n"
+            "این ربات توسط <b>صادق دوستی‌خواه</b> طراحی و توسعه داده شده است.\n\n"
+            "📧 <b>ایمیل:</b> <code>S.doostikhah@gmail.com</code>\n\n"
+            "هدف از ساخت این ربات، ارائه یک ابزار دقیق و سریع برای تحلیل و رصد بازار ارزهای دیجیتال و همچنین تنظیم هشدارهای قیمتی به صورت ۲۴ ساعته است."
+        )
+    else:
+        text = (
+            "👨‍💻 <b>About Developer</b>\n\n"
+            "This bot was designed and developed by <b>Sadegh Doostikhah</b>.\n\n"
+            "📧 <b>Email:</b> <code>S.doostikhah@gmail.com</code>\n\n"
+            "The goal of this bot is to provide a fast and accurate tool for crypto market analysis and 24/7 price alerts."
+        )
+    await update.message.reply_text(text, parse_mode='HTML')
 
 # ----------------- تحلیل پیشرفته -----------------
 
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    intro_msg = (
+        "📈 <b>تحلیل پیشرفته</b>\n\n"
+        "در این بخش، با استفاده از ۴ اندیکاتور حرفه‌ای، وضعیت ارز را تحلیل می‌کنیم:\n\n"
+        "🔹 <b>RSI:</b> قدرت خریداران و فروشندگان.\n"
+        "🔹 <b>بولینگر:</b> نوسانات قیمت.\n"
+        "🔹 <b>EMA:</b> روند اصلی بازار.\n"
+        "🔹 <b>ADX:</b> تشخیص روند قوی یا رِنج.\n\n"
+        "لطفاً <b>نام ارز</b> مورد نظر خود را تایپ کنید (مثلاً BTC):"
+    )
+    await update.message.reply_text(intro_msg, parse_mode='HTML')
     user_state[chat_id] = {'step': 'analysis_type_coin'}
-    await update.message.reply_text("لطفاً نام ارز مورد نظر خود را تایپ کنید (مثلاً BTC یا DOGE):")
 
 async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -193,38 +218,43 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         if not data_price or not ind:
             return await query.edit_message_text("❌ اطلاعات کافی برای تحلیل یافت نشد.")
             
-        # تفسیر اندیکاتورها
-        text = f"📈 <b>تحلیل جامع: {coin}</b>\n⏱ بازه: {tf_fa}\n"
-        text += f"💰 قیمت: ${data_price['price']:,.6f}\n"
-        text += f"📊 تغییر ۲۴ ساعته: {data_price['change']:+.2f}%\n\n"
+        price = data_price['price']
+        price_str = f"${price:,.6f}" if price < 1 else (f"${price:,.4f}" if price < 1000 else f"${price:,.2f}")
+
+        change_icon = "🟢" if data_price['change'] > 0 else "🔴"
+        trend_word = "صعودی" if data_price['change'] > 0 else "نزولی"
         
-        # 1. RSI
         rsi = ind['rsi']
-        if rsi > 70: rsi_status = "⚠️ اشباع خرید"
-        elif rsi < 30: rsi_status = "🟢 اشباع فروش"
-        else: rsi_status = "⚖️ خنثی"
-        text += f"<b>1️⃣ RSI:</b> {rsi} ({rsi_status})\n"
+        rsi_icon, rsi_status = ("⚠️", "<b>اشباع خرید</b>") if rsi > 70 else (("🟢", "<b>اشباع فروش</b>") if rsi < 30 else ("⚖️", "<b>خنثی</b>"))
         
-        # 2. Bollinger Bands
         upper, lower = ind['bb_upper'], ind['bb_lower']
-        if data_price['price'] > upper: bb_status = "⚠️ بالاتر از باند بالا (احتمال ریزش)"
-        elif data_price['price'] < lower: bb_status = "🟢 پایین‌تر از باند پایین (احتمال رشد)"
-        else: bb_status = "⚖️ داخل باندها (نوسان عادی)"
-        text += f"<b>2️⃣ باند بولینگر:</b> {bb_status}\n"
-        text += f"   <i>(بالا: ${upper:,.6f} | پایین: ${lower:,.6f})</i>\n"
-        
-        # 3. EMA
+        bb_icon, bb_status = ("🔴", "<b>بالاتر از باند بالا</b>") if price > upper else (("🟢", "<b>پایین‌تر از باند پایین</b>") if price < lower else ("⚖️", "<b>داخل باندها</b>"))
+            
         ema = ind['ema']
-        if data_price['price'] > ema: ema_status = "🟢 بالاتر از EMA (روند صعودی)"
-        else: ema_status = "🔴 پایین‌تر از EMA (روند نزولی)"
-        text += f"<b>3️⃣ میانگین متحرک (EMA 20):</b> {ema_status}\n"
-        
-        # 4. ADX
+        ema_icon, ema_status = ("🟢", "<b>بالاتر از EMA</b>") if price > ema else ("🔴", "<b>پایین‌تر از EMA</b>")
+            
         adx = ind['adx']
-        if adx > 25: adx_status = "💪 روند قوی"
-        elif adx < 20: adx_status = "🔀 بازار رِنج (بدون روند)"
-        else: adx_status = "⚖️ روند در حال شکل‌گیری"
-        text += f"<b>4️⃣ قدرت روند (ADX):</b> {adx_status} ({adx})\n"
+        adx_icon, adx_status = ("💪", "<b>روند قوی</b>") if adx > 25 else (("🔀", "<b>بازار رِنج</b>") if adx < 20 else ("⚖️", "<b>روند شکل‌گیری</b>"))
+
+        text = (
+            f"📈 <b>تحلیل جامع: {coin}</b>\n"
+            f"⏱ بازه زمانی: <b>{tf_fa}</b>\n"
+            f"➖➖➖➖➖➖➖➖\n"
+            f"💰 <b>قیمت لحظه‌ای:</b> {price_str}\n"
+            f"{change_icon} <b>تغییر ۲۴ ساعته:</b> {data_price['change']:+.2f}% ({trend_word})\n"
+            f"➖➖➖➖➖➖➖➖\n\n"
+            f"<b>1️⃣ شاخص RSI (14):</b>\n"
+            f"   {rsi_icon} مقدار: <code>{rsi}</code> | {rsi_status}\n\n"
+            f"<b>2️⃣ باند بولینگر:</b>\n"
+            f"   {bb_icon} {bb_status}\n"
+            f"   <i>سقف: <code>{upper:,.2f}</code> | کف: <code>{lower:,.2f}</code></i>\n\n"
+            f"<b>3️⃣ میانگین متحرک (EMA 20):</b>\n"
+            f"   {ema_icon} {ema_status}\n"
+            f"   <i>مقدار: <code>{ema:,.2f}</code></i>\n\n"
+            f"<b>4️⃣ قدرت روند (ADX):</b>\n"
+            f"   {adx_icon} {adx_status}\n"
+            f"   <i>مقدار: <code>{adx}</code></i>\n"
+        )
         
         await query.edit_message_text(text, parse_mode='HTML')
         
@@ -236,11 +266,17 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    intro_msg = (
+        "🔔 <b>مدیریت هشدارها</b>\n\n"
+        "در این بخش می‌توانید هشدار قیمت تنظیم کنید. ربات در پس‌زمینه قیمت‌ها را چک می‌کند و اگر به هدف شما برسد، پیام می‌دهد.\n"
+        "همچنین می‌توانید هشدارهای قبلی را ویرایش یا حذف کنید.\n\n"
+        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    )
     kb = [
         [InlineKeyboardButton("➕ تنظیم هشدار جدید", callback_data="new_alert")],
-        [InlineKeyboardButton("📋 مشاهده و ویرایش هشدارهای فعال", callback_data="view_alerts")]
+        [InlineKeyboardButton("📋 مشاهده و ویرایش هشدارها", callback_data="view_alerts")]
     ]
-    await update.message.reply_text("مدیریت هشدارها:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(intro_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
 async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -371,7 +407,10 @@ async def process_coin_selection(chat_id, coin, query):
 
 async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    msg = await update.message.reply_text("⏳ در حال تحلیل بازار...")
+    intro = "📊 <b>۱۰ ارز برتر بازار</b>\nدر این بخش، ۱۰ ارز باارزش‌ترین بازار را به همراه قیمت لحظه‌ای، تغییرات ۲۴ ساعته و تحلیل RSI مشاهده می‌کنید.\n\n⏳ در حال دریافت اطلاعات..."
+    msg = await update.message.reply_text(intro, parse_mode='HTML')
+    await asyncio.sleep(2) 
+    
     prices = fetch_prices()
     text = f"<b>📊 ۱۰ ارز برتر</b>\n🕒 {get_time_str(chat_id)}\n\n"
     for c in TOP_COINS:
@@ -394,7 +433,10 @@ async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    msg = await update.message.reply_text("⏳ ...")
+    intro = "🔥 <b>۱۰ ترند برتر (Watchlist)</b>\nدر این بخش، ارزهایی که در ۲۴ ساعت گذشته بیشترین توجه و معامله را در واچ‌لیست‌ها داشته‌اند را می‌بینید.\n\n⏳ در حال دریافت اطلاعات..."
+    msg = await update.message.reply_text(intro, parse_mode='HTML')
+    await asyncio.sleep(2)
+    
     prices = fetch_prices()
     text = f"<b>🔥 ۱۰ ترند برتر</b>\n🕒 {get_time_str(chat_id)}\n\n"
     cnt = 0
@@ -406,6 +448,8 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             icon = "🟢" if d['change'] > 0 else "🔴"
             text += f"<b>{c}</b> {icon}\n💰 ${d['price']:,.6f}\n📊 {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
+
+# ----------------- مدیریت متن‌ها -----------------
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
@@ -510,6 +554,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "ترند" in txt or "Trending" in txt: await trending(update, context)
     elif "تحلیل پیشرفته" in txt or "Advanced Analysis" in txt: await start_advanced_analysis(update, context)
     elif "مدیریت هشدار" in txt or "Manage Alerts" in txt: await show_alerts_menu(update, context)
+    elif "درباره سازنده" in txt or "About Developer" in txt: await about_developer(update, context)
     elif "زبان" in txt or "Language" in txt: await change_lang(update, context)
 
 if __name__ == '__main__':

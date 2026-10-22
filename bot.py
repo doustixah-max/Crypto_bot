@@ -27,9 +27,7 @@ def format_price(price):
 def get_time_str(chat_id):
     tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
     now = datetime.datetime.now(tehran_tz)
-    if user_lang.get(chat_id, 'fa') == 'fa':
-        return f"{jdatetime.date.fromgregorian(date=now.date()).strftime('%Y/%m/%d')} - {now.strftime('%H:%M:%S')}"
-    return now.strftime("%Y-%m-%d - %H:%M:%S")
+    return f"{jdatetime.date.fromgregorian(date=now.date()).strftime('%Y/%m/%d')} - {now.strftime('%H:%M:%S')}"
 
 def fetch_prices():
     prices = {}
@@ -65,9 +63,9 @@ def get_klines(symbol, timeframe='1H', limit=100):
     except: pass
     return []
 
+# --- منوی اصلی ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_lang[chat_id] = 'fa'
     user_state[chat_id] = {} 
     kb = [
         [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("۱۰ ترند برتر 🔥")],
@@ -77,6 +75,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("سلام! 🚀\nبه ربات کریپتو خوش آمدید.\nیک گزینه انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
+# --- لیست‌ها ---
 async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     msg = await update.message.reply_text("⏳ در حال دریافت...")
@@ -104,6 +103,7 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"<b>{c}</b> {icon}\n💰 {format_price(d['price'])}\n📊 {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
 
+# --- تحلیل و نمودار ---
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("📈 نام ارز را وارد کنید (مثلاً BTC):")
@@ -122,10 +122,11 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         tf_map = {'1h': '1H', '4h': '4H', '1d': '1D'}
         okx_tf = tf_map.get(timeframe, '1H')
         tf_fa = {'1h': '۱ ساعته', '4h': '۴ ساعته', '1d': 'روزانه'}.get(timeframe, timeframe)
-        await query.edit_message_text(f"⏳ در حال تحلیل {coin}...")
         
+        await query.edit_message_text(f"⏳ در حال تحلیل {coin}...")
         klines = get_klines(coin, okx_tf, 100)
         if not klines: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
+        
         closes = [k[1] for k in klines]
         data_price = fetch_prices().get(coin) or get_okx(coin)
         
@@ -143,11 +144,12 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(f"📈 تحلیل {coin}: قیمت {format_price(data_price['price'])}")
         await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار {coin}")
 
+# --- مدیریت هشدارها (دکمه‌های شیشه‌ای) ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [
-        [InlineKeyboardButton("➕ تنظیم هشدار", callback_data="new_alert")],
-        [InlineKeyboardButton("📋 هشدارهای فعال", callback_data="view_alerts")]
+        [InlineKeyboardButton("➕ تنظیم هشدار جدید", callback_data="new_alert")],
+        [InlineKeyboardButton("📋 مشاهده هشدارهای فعال", callback_data="view_alerts")]
     ]
     await update.message.reply_text("🔔 مدیریت هشدارها:", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -156,6 +158,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     chat_id = query.message.chat_id
     data = query.data
+    
     if data == "new_alert":
         user_state[chat_id] = {'step': 'choose_coin'}
         kb = []
@@ -166,34 +169,41 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 kb.append(row)
                 row = []
         if row: kb.append(row)
-        kb.append([InlineKeyboardButton("سایر (تایپ) ✍️", callback_data="alert_other")])
+        kb.append([InlineKeyboardButton("سایر ارزها (تایپ کنید) ✍️", callback_data="alert_other")])
         kb.append([InlineKeyboardButton("🔙 لغو", callback_data="alert_cancel")])
         await query.edit_message_text("مرحله ۱: ارز را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(kb))
+        
     elif data == "view_alerts":
         alerts = user_alerts.get(chat_id, [])
         if not alerts: return await query.edit_message_text("هشداری ندارید.")
         text = "📋 <b>هشدارهای شما:</b>\n\n"
-        for a in alerts:
-            text += f"🔸 {a['symbol']} | {a['target']}\n"
+        for i, a in enumerate(alerts):
+            text += f"🔸 {a['symbol']} | قیمت: {format_price(a['target'])}\n"
         await query.edit_message_text(text, parse_mode='HTML')
+
     elif data == "alert_other":
         user_state[chat_id] = {'step': 'type_coin'}
         await query.edit_message_text("نام ارز را تایپ کنید:")
+
     elif data.startswith("alertcoin_"):
         coin = data.replace("alertcoin_", "")
         data_price = fetch_prices().get(coin) or get_okx(coin)
+        if not data_price: return await query.edit_message_text("❌ ارز یافت نشد.")
         user_state[chat_id] = {'step': 'enter_target', 'symbol': coin}
-        await query.edit_message_text(f"ارز: {coin}\n💰 قیمت: {format_price(data_price['price'])}\n\nعدد قیمت هدف را وارد کنید (مثلاً 85000):")
+        await query.edit_message_text(f"ارز: {coin}\n💰 قیمت فعلی: {format_price(data_price['price'])}\n\nعدد قیمت هدف را وارد کنید (مثلاً 85000):")
+
     elif data == "alert_cancel":
         user_state[chat_id] = {}
         await query.edit_message_text("لغو شد.")
 
+# --- سایر ---
 async def gold_forex(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🌍 انس جهانی طلا: $2,350.50\n💵 شاخص دلار: 104.50")
+    await update.message.reply_text("🌍 انس جهانی طلا: $2,350.50\n💵 شاخص دلار: 104.50\n🛢 نفت برنت: $82.30")
 
 async def about_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👨‍💻 <b>صادق دوستی‌خواه</b>\n📧 <code>S.doostikhah@gmail.com</code>", parse_mode='HTML')
 
+# --- مدیریت متن‌ها و ورودی‌ها ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     up = txt.upper()
@@ -204,18 +214,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[chat_id] = {}
         return await update.message.reply_text("منو ریست شد. /start را بزنید.")
 
+    # تحلیل: دریافت نام ارز
     if state.get('step') == 'analysis_type_coin':
         user_state[chat_id] = {'step': 'analysis_choose_tf', 'symbol': up}
         kb = [
             [InlineKeyboardButton("۱ ساعته ⏱", callback_data="tf_1h"), InlineKeyboardButton("۴ ساعته ⏰", callback_data="tf_4h")],
             [InlineKeyboardButton("روزانه 📅", callback_data="tf_1d")]
         ]
-        return await update.message.reply_text(f"ارز {up}. بازه زمانی:", reply_markup=InlineKeyboardMarkup(kb))
+        return await update.message.reply_text(f"ارز {up} انتخاب شد. بازه زمانی:", reply_markup=InlineKeyboardMarkup(kb))
 
+    # هشدار: دریافت نام ارز دستی
     if state.get('step') == 'type_coin':
         user_state[chat_id] = {'step': 'enter_target', 'symbol': up}
-        return await update.message.reply_text(f"ارز {up}. عدد قیمت هدف را وارد کنید:")
+        data_price = fetch_prices().get(up) or get_okx(up)
+        if data_price:
+            return await update.message.reply_text(f"ارز {up} انتخاب شد. قیمت فعلی: {format_price(data_price['price'])}\nعدد قیمت هدف را وارد کنید:")
+        return await update.message.reply_text("❌ ارز یافت نشد.")
 
+    # هشدار: ثبت قیمت هدف
     if state.get('step') == 'enter_target':
         try:
             target = float(txt)
@@ -228,6 +244,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             return await update.message.reply_text("❌ عدد معتبر وارد کنید.")
 
+    # منوها
     if "۱۰ ارز برتر" in txt: await top10(update, context)
     elif "ترند" in txt: await trending(update, context)
     elif "تحلیل" in txt: await start_advanced_analysis(update, context)
@@ -238,8 +255,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|alert_cancel)")) 
+    # روتینگ (مسیریابی) دقیق برای دکمه‌های شیشه‌ای
     app.add_handler(CallbackQueryHandler(handle_analysis_callback, pattern="^tf_"))
+    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|alert_cancel)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("✅ ربات روشن شد!")
     app.run_polling(drop_pending_updates=True)

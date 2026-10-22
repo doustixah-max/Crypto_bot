@@ -3,6 +3,7 @@ import requests
 import time
 import datetime
 import jdatetime
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -15,17 +16,28 @@ def get_shamsi_datetime():
     shamsi_date = jdatetime.date.fromgregorian(date=now.date())
     return f"{shamsi_date.strftime('%Y/%m/%d')} - {now.strftime('%H:%M:%S')}"
 
-# --- توابع دریافت قیمت (هوشمند) ---
-def get_wallex_data(symbol):
+def fetch_all_prices():
+    """دریافت یک‌جای قیمت تمام ارزها از والکس (سریع‌ترین و دقیق‌ترین روش)"""
+    prices = {}
     try:
-        res = requests.get("https://api.wallex.ir/v1/markets", timeout=8).json()
-        if res.get('success') and f"{symbol}USDT" in res['result']['symbols']:
-            stats = res['result']['symbols'][f"{symbol}USDT"]['stats']
-            return {'price': float(stats['lastPrice']), 'change': float(stats['priceChangePercent'])}
-    except: pass
-    return None
+        # والکس یک API دارد که تمام مارکت‌ها را با هم می‌دهد
+        res = requests.get("https://api.wallex.ir/v1/markets", timeout=10).json()
+        if res.get('success'):
+            symbols = res['result']['symbols']
+            for sym, data in symbols.items():
+                if sym.endswith("USDT"):
+                    coin = sym.replace("USDT", "")
+                    stats = data['stats']
+                    prices[coin] = {
+                        'price': float(stats['lastPrice']),
+                        'change': float(stats['priceChangePercent'])
+                    }
+    except Exception:
+        pass
+    return prices
 
-def get_nobitex_data(symbol):
+def get_fallback_price(symbol):
+    """اگر ارزی در والکس نبود، از نوبیتکس یا OKX بگیر"""
     try:
         url = f"https://api.nobitex.ir/market/stats?srcCurrency={symbol.lower()}&dstCurrency=usdt"
         res = requests.get(url, timeout=8).json()
@@ -33,9 +45,7 @@ def get_nobitex_data(symbol):
             stats = res['stats'][f"{symbol.lower()}-usdt"]
             return {'price': float(stats['latest']), 'change': float(stats['dayChange'])}
     except: pass
-    return None
 
-def get_okx_data(symbol):
     try:
         url = f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT"
         res = requests.get(url, timeout=8).json()
@@ -48,85 +58,81 @@ def get_okx_data(symbol):
     except: pass
     return None
 
-def get_smart_price(symbol):
-    data = get_wallex_data(symbol)
-    if data: return data
-    data = get_nobitex_data(symbol)
-    if data: return data
-    return get_okx_data(symbol)
-
-# --- توابع دریافت لیست از سایت‌های خارجی ---
-def get_coingecko_trending():
-    try:
-        res = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=10).json()
-        return [item['item']['symbol'].upper() for item in res.get('coins', [])[:5]]
-    except:
-        return []
-
-def get_coinmarketcap_trending():
-    """استخراج لیست پرطرفدار از صفحه CoinMarketCap (با شبیه‌سازی مرورگر)"""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        # این آدرس صفحه‌ای است که ارزهای پربازدید را نشان می‌دهد
-        url = "https://coinmarketcap.com/most-viewed-pages/"
-        res = requests.get(url, headers=headers, timeout=10)
-        # پیدا کردن نمادها با استفاده از الگوی ساده (چون صفحه داینامیک است، از API داخلی استفاده می‌کنیم)
-        api_url = "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/listing?start=1&limit=20&sortBy=market_cap&sortType=desc&convert=USD&cryptoType=all&tagType=all&audited=false"
-        # برای سادگی و پایدارتر بودن، از لیست ثابت پرطرفدارهای CMC استفاده می‌کنیم اگر API بالا جواب نداد
-        return ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA", "PEPE", "SUI", "NEAR", "TAO"]
-    except:
-        return []
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [KeyboardButton("Top 10 Coins 📊"), KeyboardButton("Trending 🔥")],
-        [KeyboardButton("Reset 🔄")]
+        [KeyboardButton("۱۰ ارز برتر 📊"), KeyboardButton("ترندها 🔥")],
+        [KeyboardButton("ریست 🔄")]
     ]
-    await update.message.reply_text("Welcome! 🚀\nPlease choose an option:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    await update.message.reply_text("سلام! 🚀\nیک گزینه انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
-async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Fetching trending lists...")
+async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
     time_str = get_shamsi_datetime()
     
-    # دریافت لیست‌ها
-    cg_list = get_coingecko_trending()
-    cmc_list = get_coinmarketcap_trending()
+    # ۱. دریافت یک‌جای تمام قیمت‌ها (فقط ۱ درخواست به والکس)
+    all_wallex_prices = fetch_all_prices()
     
-    # اگر لیست‌ها خالی بودند، از یک لیست پیش‌فرض استفاده کن
-    if not cg_list: cg_list = ["BTC", "ETH", "SOL", "PEPE", "WIF"]
-    if not cmc_list: cmc_list = ["BTC", "ETH", "XRP", "SOL", "DOGE"]
+    text = f"<b>📊 ۱۰ ارز برتر بازار</b>\n🕒 {time_str} (به وقت تهران)\n\n"
     
-    text = f"<b>🔥 Trending Lists (Watchlists)</b>\n🕒 {time_str} (Iran Time)\n\n"
-    
-    # --- بخش اول: CoinGecko ---
-    text += "<b>📊 From CoinGecko:</b>\n"
-    for symbol in cg_list:
-        data = get_smart_price(symbol)
-        if data:
-            icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
-            text += f"• <b>{symbol}</b> {icon}: ${data['price']:,.2f} ({data['change']:+.2f}%)\n"
-        else:
-            text += f"• <b>{symbol}</b>: Data N/A\n"
-    text += "➖➖➖➖➖➖\n"
-    
-    # --- بخش دوم: CoinMarketCap ---
-    text += "<b>📈 From CoinMarketCap:</b>\n"
-    for symbol in cmc_list[:5]: # فقط ۵ تای اول
-        data = get_smart_price(symbol)
-        if data:
-            icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
-            text += f"• <b>{symbol}</b> {icon}: ${data['price']:,.2f} ({data['change']:+.2f}%)\n"
-        else:
-            text += f"• <b>{symbol}</b>: Data N/A\n"
+    for coin in TOP_COINS:
+        # ۲. اگر در والکس بود استفاده کن، اگر نبود سراغ بقیه برو
+        data = all_wallex_prices.get(coin)
+        if not data:
+            data = get_fallback_price(coin)
             
+        if not data:
+            text += f"<b>{coin}</b>\n⚠️ داده در دسترس نیست.\n➖➖➖➖➖➖\n"
+        else:
+            icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
+            text += f"<b>{coin}</b> {icon}\n"
+            text += f"💰 قیمت: ${data['price']:,.2f}\n"
+            text += f"📊 تغییر: {data['change']:+.2f}%\n➖➖➖➖➖➖\n"
+        
+    await msg.edit_text(text, parse_mode='HTML')
+
+async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⏳ در حال دریافت ترندها...")
+    time_str = get_shamsi_datetime()
+    
+    # دریافت یک‌جای قیمت‌ها
+    all_wallex_prices = fetch_all_prices()
+    
+    trending_symbols = []
+    try:
+        res = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=10).json()
+        raw = [item['item']['symbol'].upper() for item in res.get('coins', [])]
+        for sym in raw:
+            if len(trending_symbols) >= 5: break
+            if sym not in trending_symbols: trending_symbols.append(sym)
+    except: pass
+    
+    fallback = ["SOL", "PEPE", "DOGE", "WIF", "AVAX"]
+    for sym in fallback:
+        if len(trending_symbols) >= 5: break
+        if sym not in trending_symbols: trending_symbols.append(sym)
+
+    text = f"<b>🔥 ارزهای پرطرفدار</b>\n🕒 {time_str}\n\n"
+    
+    for symbol in trending_symbols:
+        data = all_wallex_prices.get(symbol)
+        if not data:
+            data = get_fallback_price(symbol)
+            
+        if not data:
+            text += f"<b>{symbol}</b>\n⚠️ داده در دسترس نیست.\n➖➖➖➖➖➖\n"
+        else:
+            icon = "🟢" if data['change'] > 0 else ("🔴" if data['change'] < 0 else "⚪")
+            text += f"<b>{symbol}</b> {icon}\n"
+            text += f"💰 قیمت: ${data['price']:,.2f}\n"
+            text += f"📊 تغییر: {data['change']:+.2f}%\n➖➖➖➖➖➖\n"
+
     await msg.edit_text(text, parse_mode='HTML')
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
-    if txt == "Trending 🔥":
-        await trending(update, context)
-    elif txt == "Reset 🔄":
-        await update.message.reply_text("Menu hidden. Send /start to reopen.", reply_markup=ReplyKeyboardRemove())
+    if "۱۰ ارز برتر" in txt: await top10(update, context)
+    elif "ترندها" in txt: await trending(update, context)
+    elif "ریست" in txt: await update.message.reply_text("منو بسته شد.", reply_markup=ReplyKeyboardRemove())
 
 if __name__ == '__main__':
     while True:
@@ -135,5 +141,5 @@ if __name__ == '__main__':
             app.add_handler(CommandHandler("start", start))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
             app.run_polling(drop_pending_updates=True)
-        except Exception as e:
+        except Exception:
             time.sleep(5)

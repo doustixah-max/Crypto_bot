@@ -56,7 +56,6 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             if not data: continue
             cp = data['price']
             
-            # بررسی نوع هشدار (قیمت یا درصد)
             triggered = False
             if a['type'] == 'price':
                 if (a['direction'] == 'above' and cp >= a['target']) or (a['direction'] == 'below' and cp <= a['target']):
@@ -66,7 +65,6 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
                     triggered = True
 
             if triggered:
-                unit = "$" if a['type'] == 'price' else "%"
                 msg = f"🚨 هشدار: {a['symbol']} به هدف رسید!\nقیمت فعلی: ${cp:,.2f}" if lang == 'fa' else f"🚨 Alert: {a['symbol']} reached target!\nCurrent: ${cp:,.2f}"
                 try: await context.bot.send_message(chat_id, msg)
                 except: pass
@@ -105,13 +103,13 @@ async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text("زبان به فارسی تغییر کرد.", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-# ----------------- سیستم هشدار مرحله به مرحله -----------------
+# ----------------- سیستم هشدار -----------------
 
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [
         [InlineKeyboardButton("➕ تنظیم هشدار جدید", callback_data="new_alert")],
-        [InlineKeyboardButton("📋 مشاهده و حذف هشدارهای فعال", callback_data="view_alerts")]
+        [InlineKeyboardButton("📋 مشاهده و ویرایش هشدارهای فعال", callback_data="view_alerts")]
     ]
     await update.message.reply_text("مدیریت هشدارها:", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -146,7 +144,10 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
             type_fa = "قیمت" if a['type'] == 'price' else "درصد"
             dir_fa = "بالاتر" if a['direction'] == 'above' else "پایین‌تر"
             text += f"🔸 {a['symbol']} | {type_fa} {dir_fa} از {a['target']}\n"
-            kb.append([InlineKeyboardButton(f"❌ حذف هشدار {a['symbol']}", callback_data=f"del_alert_{i}")])
+            kb.append([
+                InlineKeyboardButton(f"✏️ ویرایش {a['symbol']}", callback_data=f"edit_alert_{i}"),
+                InlineKeyboardButton(f"❌ حذف {a['symbol']}", callback_data=f"del_alert_{i}")
+            ])
         
         kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_alerts")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
@@ -156,11 +157,18 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
             removed = user_alerts[chat_id].pop(idx)
             await query.edit_message_text(f"✅ هشدار {removed['symbol']} حذف شد.")
-        else:
-            await query.edit_message_text("❌ خطا در حذف.")
+
+    elif data.startswith("edit_alert_"):
+        idx = int(data.replace("edit_alert_", ""))
+        if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
+            alert = user_alerts[chat_id][idx]
+            user_state[chat_id] = {'step': 'edit_target', 'alert_idx': idx, 'symbol': alert['symbol'], 'type': alert['type'], 'direction': alert['direction']}
+            
+            unit = "$" if alert['type'] == 'price' else "%"
+            await query.edit_message_text(f"ویرایش هشدار {alert['symbol']}.\nلطفاً عدد جدید را وارد کنید (به {unit}):")
 
     elif data == "back_to_alerts":
-        await show_alerts_menu(query, context) # فراخوانی منوی اصلی هشدار
+        await show_alerts_menu(query, context)
 
     elif data == "alert_other":
         user_state[chat_id] = {'step': 'type_coin'}
@@ -171,7 +179,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await process_coin_selection(chat_id, coin, query)
         
     elif data.startswith("type_"):
-        alert_type = data.replace("type_", "") # 'price' or 'percent'
+        alert_type = data.replace("type_", "")
         state = user_state.get(chat_id)
         state['type'] = alert_type
         state['step'] = 'choose_direction'
@@ -270,38 +278,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if "ریست" in txt or "Reset" in txt:
         user_state[chat_id] = {}
-        return await update.message.reply_text("منو بسته شد و عملیات لغو گردید. /start را بزنید.", reply_markup=ReplyKeyboardRemove())
+        return await update.message.reply_text("منو بسته شد.", reply_markup=ReplyKeyboardRemove())
 
     if state.get('step') == 'type_coin':
         coin = up
         data = fetch_prices().get(coin) or get_okx(coin)
         if not data:
-            return await update.message.reply_text(f"❌ ارز {coin} یافت نشد. نام دیگری بفرستید.")
-        
+            return await update.message.reply_text(f"❌ ارز {coin} یافت نشد.")
         user_state[chat_id] = {'step': 'choose_type', 'symbol': coin}
         icon = "🟢" if data['change'] > 0 else "🔴"
         text = f"ارز: <b>{coin}</b>\n💰 ${data['price']:,.2f}\n{icon} تغییر: {data['change']:+.2f}%\n\nمرحله ۲: هشدار بر چه اساس باشد؟"
         kb = [
             [InlineKeyboardButton("قیمت 💵", callback_data="type_price")],
-            [InlineKeyboardButton("درصد تغییر 📊", callback_data="type_percent")],
+            [InlineKeyboardButton("درصد 📊", callback_data="type_percent")],
             [InlineKeyboardButton("🔙 لغو", callback_data="alert_cancel")]
         ]
         return await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
-    if state.get('step') == 'enter_target':
+    # ثبت هشدار جدید یا ویرایش
+    if state.get('step') in ['enter_target', 'edit_target']:
         try:
             target = float(txt.replace(',', '').replace('%', ''))
+            
+            # اگر ویرایش بود
+            if state.get('step') == 'edit_target':
+                idx = state['alert_idx']
+                if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
+                    user_alerts[chat_id][idx]['target'] = target
+                    await update.message.reply_text("✅ هشدار با موفقیت ویرایش شد.")
+                user_state[chat_id] = {}
+                return
+
+            # اگر ثبت جدید بود
             symbol = state['symbol']
             direction = state['direction']
             alert_type = state['type']
             
             if chat_id not in user_alerts: user_alerts[chat_id] = []
-            # حذف هشدار قبلی برای همان ارز
             user_alerts[chat_id] = [a for a in user_alerts[chat_id] if a['symbol'] != symbol]
             user_alerts[chat_id].append({'symbol': symbol, 'target': target, 'direction': direction, 'type': alert_type})
             
-            unit = "$" if alert_type == 'price' else "%"
-            msg = f"✅ هشدار {symbol} تنظیم شد!\nاگر {'بالاتر' if direction=='above' else 'پایین‌تر'} از {target}{unit} رفت، به شما اطلاع می‌دهم."
+            # محاسبه قیمت هدف برای نمایش
+            current_data = fetch_prices().get(symbol) or get_okx(symbol)
+            cp = current_data['price'] if current_data else 0
+            
+            if alert_type == 'price':
+                final_str = f"${target:,.2f}"
+            else:
+                final_price = cp * (1 + target/100) if direction == 'above' else cp * (1 - target/100)
+                final_str = f"{target}% (معادل قیمت ${final_price:,.2f})"
+                
+            dir_fa = "بالاتر" if direction == "above" else "پایین‌تر"
+            msg = f"✅ هشدار برای {symbol} تنظیم شد!\nاگر قیمت به {final_str} ({dir_fa}) رسید، به شما اطلاع می‌دهم."
             await update.message.reply_text(msg)
             user_state[chat_id] = {} 
             return
@@ -326,8 +354,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "ترند" in txt or "Trending" in txt: await trending(update, context)
     elif "مدیریت هشدار" in txt or "Manage Alerts" in txt: await show_alerts_menu(update, context)
     elif "زبان" in txt or "Language" in txt: await change_lang(update, context)
-    elif "راهنما" in txt or "Help" in txt: 
-        await update.message.reply_text("از دکمه مدیریت هشدارها استفاده کنید یا نام ارز را تایپ کنید.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()

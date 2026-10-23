@@ -147,7 +147,7 @@ def get_klines_data(symbol, timeframe='1H', limit=40):
                 ts = int(c[0])
                 dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 data.append({
-                    "t": dt,
+                    "x": dt,
                     "o": float(c[1]), "h": float(c[2]),
                     "l": float(c[3]), "c": float(c[4])
                 })
@@ -240,7 +240,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[chat_id] = {} 
     t = TEXTS[get_lang(chat_id)]
     
-    # حذف دکمه درباره سازنده و مرتب‌سازی منو
     kb = [
         [KeyboardButton(t['top10']), KeyboardButton(t['trend'])],
         [KeyboardButton(t['analysis']), KeyboardButton(t['alerts'])],
@@ -363,27 +362,65 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
+        # سیستم فوق‌العاده مقاوم برای رسم نمودار شمعی
         try:
+            unit = 'hour' if okx_tf in ['1H', '4H'] else ('day' if okx_tf == '1D' else 'minute')
+            
             chart_config = {
                 "type": "candlestick",
                 "data": {
                     "datasets": [{
                         "label": coin,
-                        "data": data_ohlc,
-                        "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
+                        "data": data_ohlc # استفاده مستقیم از فرمت آبجکت {x,o,h,l,c}
                     }]
                 },
                 "options": {
-                    "parsing": False,
-                    "scales": {"x": {"type": "time"}},
+                    "parsing": False, # بسیار مهم: جلوگیری از خطای n=4
+                    "scales": {
+                        "x": {
+                            "type": "time",
+                            "time": {"unit": unit}
+                        }
+                    },
                     "plugins": {"legend": {"display": False}}
                 }
             }
             encoded = urllib.parse.quote(json.dumps(chart_config))
             chart_url = f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bkg=%23111111"
-            img_data = requests.get(chart_url, timeout=10).content
-            await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 {coin} - {tf_fa}")
-        except Exception: pass
+            
+            img_resp = requests.get(chart_url, timeout=10)
+            
+            # تشخیص خطا: اگر پاسخ از نوع عکس نبود یا حجمش خیلی کم بود (عکس خطای سفید)
+            if 'image' not in img_resp.headers.get('Content-Type', '') or len(img_resp.content) < 5000:
+                raise Exception("Invalid Chart Image")
+                
+            await context.bot.send_photo(chat_id=chat_id, photo=img_resp.content, caption=f"📊 {coin} - {tf_fa}")
+            
+        except Exception:
+            # جایگزین (Fallback): اگر شمعی خطا داد، نمودار خطی سبز بفرست
+            try:
+                line_config = {
+                    "type": "line",
+                    "data": {
+                        "labels": [d['x'] for d in data_ohlc],
+                        "datasets": [{
+                            "label": coin,
+                            "data": [d['c'] for d in data_ohlc],
+                            "borderColor": "#00ff00",
+                            "backgroundColor": "rgba(0, 255, 0, 0.1)",
+                            "fill": True,
+                            "borderWidth": 2,
+                            "pointRadius": 0
+                        }]
+                    },
+                    "options": {"plugins": {"legend": {"display": False}}}
+                }
+                line_encoded = urllib.parse.quote(json.dumps(line_config))
+                line_url = f"https://quickchart.io/chart?c={line_encoded}&w=800&h=400&bkg=%23111111"
+                line_img = requests.get(line_url, timeout=10).content
+                await context.bot.send_photo(chat_id=chat_id, photo=line_img, caption=f"📊 نمودار روند {coin} - {tf_fa}")
+            except:
+                pass
 
 async def show_global_markets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = TEXTS[get_lang(update.effective_chat.id)]

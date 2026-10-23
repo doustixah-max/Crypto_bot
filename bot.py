@@ -50,8 +50,7 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines_dataframe(symbol, timeframe='1H', limit=60):
-    """دریافت داده‌های شمعی و تبدیل به DataFrame برای mplfinance"""
+def get_klines_dataframe(symbol, timeframe='1H', limit=50):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
@@ -209,12 +208,16 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         # --- رسم نمودار شمعی با mplfinance ---
         try:
-            # تنظیمات ظاهری نمودار (پس‌زمینه تیره، شمع سبز و قرمز)
             mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit', volume='in')
-            s  = mpf.make_mpf_style(marketcolors=mc, gridstyle='--', y_on_right=False, facecolor='#111111', edgecolor='#111111', figcolor='#111111', fontcolor='white')
+            
+            # رفع خطای fontcolor با استفاده از استایل استاندارد و تنظیم rc
+            s = mpf.make_mpf_style(
+                base_mpf_style='nightclouds', 
+                marketcolors=mc,
+                rc={'font.color': 'white', 'axes.labelcolor': 'white', 'xtick.color': 'white', 'ytick.color': 'white', 'figure.facecolor': '#111111', 'axes.facecolor': '#111111'}
+            )
             
             buf = io.BytesIO()
-            # mav=(20) خط میانگین متحرک (EMA) را روی نمودار رسم می‌کند
             mpf.plot(df, type='candle', mav=(20), style=s, savefig=buf, figsize=(10, 6), tight_layout=True)
             buf.seek(0)
             

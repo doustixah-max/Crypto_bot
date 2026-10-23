@@ -6,3 +6,4 @@ httpx
 mplfinance
 pandas
 matplotlib
+yfinance

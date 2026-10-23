@@ -2,9 +2,8 @@ import os
 import requests
 import datetime
 import jdatetime
-import io
-import pandas as pd
-import mplfinance as mpf
+import json
+import urllib.parse
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -50,7 +49,7 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines_dataframe(symbol, timeframe='1H', limit=50):
+def get_klines(symbol, timeframe='1H', limit=40):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
@@ -58,20 +57,17 @@ def get_klines_dataframe(symbol, timeframe='1H', limit=50):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
-                dt = datetime.datetime.fromtimestamp(ts/1000)
+                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 data.append({
-                    "Date": dt,
-                    "Open": float(c[1]),
-                    "High": float(c[2]),
-                    "Low": float(c[3]),
-                    "Close": float(c[4]),
-                    "Volume": float(c[5])
+                    "t": dt,
+                    "o": float(c[1]),
+                    "h": float(c[2]),
+                    "l": float(c[3]),
+                    "c": float(c[4])
                 })
-            df = pd.DataFrame(data)
-            df.set_index('Date', inplace=True)
-            return df
+            return data
     except: pass
-    return None
+    return []
 
 def calculate_indicators(closes):
     if len(closes) < 20: return None
@@ -163,13 +159,14 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         okx_tf = tf_map.get(timeframe, '1H')
         tf_labels = {'1m': '۱ دقیقه', '5m': '۵ دقیقه', '15m': '۱۵ دقیقه', '30m': '۳۰ دقیقه', '1H': '۱ ساعته', '4H': '۴ ساعته', '1D': 'روزانه'}
         tf_fa = tf_labels.get(timeframe, timeframe)
+        unit = 'hour' if timeframe in ['1H', '4H'] else ('day' if timeframe == '1D' else 'minute')
         
-        await query.edit_message_text(f"⏳ در حال رسم نمودار شمعی {coin} ({tf_fa})...")
+        await query.edit_message_text(f"⏳ در حال تحلیل {coin} ({tf_fa})...")
         
-        df = get_klines_dataframe(coin, okx_tf, 50)
-        if df is None or df.empty: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
+        ohlc_data = get_klines(coin, okx_tf, 40)
+        if not ohlc_data: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
-        closes = df['Close'].tolist()
+        closes = [d['c'] for d in ohlc_data]
         ind = calculate_indicators(closes)
         data_price = fetch_prices().get(coin) or get_okx(coin)
         cp = data_price['price']
@@ -206,34 +203,62 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- رسم نمودار شمعی با mplfinance (نسخه سازگار با تمام نسخه‌ها) ---
+        # =========================================================
+        # نمودار شمعی استاندارد QuickChart + جایگزین خطی
+        # =========================================================
+        chart_sent = False
+        
+        # لایه اول: شمعی
+        chart_config = {
+            "type": "candlestick",
+            "data": {
+                "datasets": [{
+                    "label": coin,
+                    "data": ohlc_data,
+                    "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
+                }]
+            },
+            "options": {
+                "scales": {"x": {"type": "time", "time": {"unit": unit}}},
+                "plugins": {"legend": {"display": False}}
+            }
+        }
+        encoded = urllib.parse.quote(json.dumps(chart_config))
+        chart_url = f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bkg=%23111111"
+        
         try:
-            mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit', volume='in')
-            
-            # استایل استاندارد و سازگار
-            custom_style = mpf.make_mpf_style(
-                base_mpl_style="dark_background",
-                marketcolors=mc,
-                facecolor="#111111",
-                figcolor="#111111",
-                edgecolor="#888888",
-                gridcolor="#333333",
-                rc={
-                    "axes.labelcolor": "white",
-                    "xtick.color": "white",
-                    "ytick.color": "white"
-                }
-            )
-            
-            buf = io.BytesIO()
-            mpf.plot(df, type='candle', mav=(20), style=custom_style, savefig=buf, figsize=(10, 6), tight_layout=True)
-            buf.seek(0)
-            
-            await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}\n🟡 خط طلایی: EMA 20")
-        except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار: {str(e)[:100]}")
+            resp = requests.get(chart_url, timeout=10)
+            if resp.status_code == 200 and len(resp.content) > 10000: # فایل‌های زیر 10KB عکس خطا هستند
+                await context.bot.send_photo(chat_id=chat_id, photo=resp.content, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
+                chart_sent = True
+        except: pass
+        
+        # لایه دوم: اگر شمعی خطا داد، نمودار خطی زیبا بفرست
+        if not chart_sent:
+            labels = [d['t'] for d in ohlc_data]
+            fallback_config = {
+                "type": "line",
+                "data": {
+                    "labels": labels,
+                    "datasets": [{
+                        "label": coin, 
+                        "data": closes, 
+                        "borderColor": "#00ff00", 
+                        "backgroundColor": "rgba(0,255,0,0.1)", 
+                        "fill": True, 
+                        "borderWidth": 2, 
+                        "pointRadius": 0
+                    }]
+                },
+                "options": {"plugins": {"legend": {"display": False}}}
+            }
+            fallback_url = f"https://quickchart.io/chart?c={urllib.parse.quote(json.dumps(fallback_config))}&w=800&h=400&bkg=%23111111"
+            try:
+                resp2 = requests.get(fallback_url, timeout=10)
+                await context.bot.send_photo(chat_id=chat_id, photo=resp2.content, caption=f"📊 نمودار روند {coin} - {tf_fa} (نسخه جایگزین)")
+            except: pass
 
-# --- هشدارها (کامل) ---
+# --- هشدارها ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [

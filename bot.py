@@ -4,11 +4,11 @@ import datetime
 import jdatetime
 import json
 import urllib.parse
+import io
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHART_IMG_KEY = os.getenv("CHART_IMG_API_KEY") # کلید دریافت شده از chart-img.com
 TOP_COINS = ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK"]
 TRENDING_COINS = ["SOL", "PEPE", "DOGE", "WIF", "AVAX", "TON", "SHIB", "BONK", "FLOKI", "NOT"]
 
@@ -51,17 +51,28 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines(symbol, timeframe='1H', limit=40):
-    """دریافت کندل‌ها برای محاسبه اندیکاتورها (فقط Close)"""
+def get_klines_ohlc(symbol, timeframe='1H', limit=40):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
         if res.get('code') == '0' and res.get('data'):
-            return [float(c[4]) for c in reversed(res['data'])]
+            data = []
+            for c in reversed(res['data']):
+                ts = int(c[0])
+                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%m-%d %H:%M')
+                # فرمت استاندارد برای QuickChart
+                data.append({
+                    "label": dt,
+                    "o": float(c[1]),
+                    "h": float(c[2]),
+                    "l": float(c[3]),
+                    "c": float(c[4])
+                })
+            return data
     except: pass
     return []
 
-def calculate_indicators(closes):
+def calculate_indicators(closes, highs, lows):
     if len(closes) < 20: return None
     results = {}
     
@@ -92,6 +103,8 @@ def calculate_indicators(closes):
     avg_tr = sum(trs[-14:]) / 14
     price_change = abs(closes[-1] - closes[-14])
     results['adx'] = (price_change / avg_tr) * 10 if avg_tr > 0 else 0
+    results['highest'] = max(highs)
+    results['lowest'] = min(lows)
     
     return results
 
@@ -157,7 +170,7 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"<b>{c}</b> {icon}\n💰 قیمت لحظه‌ای: {format_price(d['price'])}\n📊 تغییر ۲۴س: {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
 
-# --- تحلیل پیشرفته (با سرویس جدید) ---
+# --- تحلیل پیشرفته ---
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("📈 نام ارز را وارد کنید (مثلاً BTC):")
@@ -182,10 +195,14 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(f"⏳ در حال تحلیل {coin} در تایم‌فریم {tf_fa}...")
         
-        closes = get_klines(coin, okx_tf, 40)
-        if not closes: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
+        ohlc_data = get_klines_ohlc(coin, okx_tf, 40)
+        if not ohlc_data: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
-        ind = calculate_indicators(closes)
+        closes = [d['c'] for d in ohlc_data]
+        highs = [d['h'] for d in ohlc_data]
+        lows = [d['l'] for d in ohlc_data]
+        
+        ind = calculate_indicators(closes, highs, lows)
         data_price = fetch_prices().get(coin) or get_okx(coin)
         current_price = data_price['price']
         
@@ -215,65 +232,69 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         elif score <= -2: summary = "🔴 <b>نزولی</b>\nفشار فروشندگان بالاست."
         else: summary = "⚖️ <b>خنثی</b>\nسیگنال‌های متناقض."
 
+        # متن فوق‌العاده منظم با استفاده از Blockquote
         text = (
             f"📈 <b>تحلیل {coin}</b> ({tf_fa})\n"
-            f"➖➖➖➖➖➖➖➖\n"
+            f"<blockquote>"
             f"💰 <b>قیمت لحظه‌ای:</b> {format_price(current_price)}\n"
             f"📊 <b>تغییر ۲۴س:</b> {data_price['change']:+.2f}%\n"
-            f"➖➖➖➖➖➖➖➖\n"
-            f"📉 <b>اندیکاتورها:</b>\n\n"
-            f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
-            f"2️⃣ <b>بولینگر:</b>\n   {bb_txt}\n\n"
-            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n\n"
-            f"4️⃣ <b>ADX:</b>\n   {adx_txt}\n"
-            f"➖➖➖➖➖➖➖➖\n"
-            f"🎯 <b>برآیند نهایی:</b>\n{summary}"
+            f"⬆️ <b>سقف بازه:</b> {format_price(ind['highest'])}\n"
+            f"⬇️ <b>کف بازه:</b> {format_price(ind['lowest'])}"
+            f"</blockquote>\n"
+            f"<b>📉 اندیکاتورها:</b>\n"
+            f"1️⃣ <b>RSI:</b> {rsi_txt}\n"
+            f"2️⃣ <b>بولینگر:</b> {bb_txt}\n"
+            f"3️⃣ <b>EMA:</b> {ema_txt}\n"
+            f"4️⃣ <b>ADX:</b> {adx_txt}\n\n"
+            f"🎯 {summary}"
         )
         
         await query.edit_message_text(text, parse_mode='HTML')
         
         # =========================================================
-        # سیستم جدید ارسال نمودار
+        # ساخت نمودار شمعی با فرمت استاندارد [o, h, l, c]
         # =========================================================
-        chart_sent = False
+        labels = [d['label'] for d in ohlc_data]
+        candle_data = [[d['o'], d['h'], d['l'], d['c']] for d in ohlc_data]
         
-        # لایه اول: استفاده از سرویس Chart-Img (اگر کلید وجود داشته باشد)
-        if CHART_IMG_KEY:
-            try:
-                # نگاشت تایم‌فریم به فرمت Chart-Img
-                ci_tf = {'1m': '1', '5m': '5', '15m': '15', '30m': '30', '1H': '60', '4H': '240', '1D': 'D'}
-                chart_img_url = "https://api.chart-img.com/v2/tradingview/advanced-chart"
-                payload = {
-                    "symbol": f"BINANCE:{coin}USDT",
-                    "interval": ci_tf.get(timeframe, '60'),
-                    "theme": "dark",
-                    "style": "candlestick"
+        chart_config = {
+            "type": "candlestick",
+            "data": {
+                "labels": labels,
+                "datasets": [
+                    {
+                        "label": coin,
+                        "data": candle_data,
+                        "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
+                    }
+                ]
+            },
+            "options": {
+                "plugins": {"legend": {"display": False}},
+                "scales": {"x": {"type": "category"}}
+            }
+        }
+        encoded_config = urllib.parse.quote(json.dumps(chart_config))
+        chart_url = f"https://quickchart.io/chart?c={encoded_config}&w=800&h=400&bkg=%23111111"
+        
+        try:
+            img_data = requests.get(chart_url, timeout=15).content
+            if len(img_data) > 5000:
+                await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
+            else:
+                # اگر عکس خطا (سفید) بود، نمودار خطی بفرست
+                fallback_config = {
+                    "type": "line",
+                    "data": {
+                        "labels": labels,
+                        "datasets": [{"label": coin, "data": closes, "borderColor": "#00ff00", "fill": False}]
+                    }
                 }
-                headers = {"x-api-key": CHART_IMG_KEY, "Content-Type": "application/json"}
-                resp = requests.post(chart_img_url, json=payload, headers=headers, timeout=15)
-                
-                if resp.status_code == 200:
-                    img_data = resp.content
-                    if len(img_data) > 5000: # اطمینان از اینکه عکس خطا نیست
-                        await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
-                        chart_sent = True
-            except: pass
-
-        # لایه دوم: استفاده از FINVIZ به عنوان جایگزین (بدون نیاز به کلید)
-        if not chart_sent:
-            try:
-                finviz_tf = {'1m': 'm1', '5m': 'm5', '15m': 'm15', '30m': 'm30', '1H': 'h1', '4H': 'h4', '1D': 'd1'}
-                f_tf = finviz_tf.get(timeframe, 'h1')
-                finviz_url = f"https://finviz.com/fx_image.ashx?{coin}USD_{f_tf}_l.png"
-                
-                img_resp = requests.get(finviz_url, timeout=10)
-                if img_resp.status_code == 200 and len(img_resp.content) > 5000:
-                    await context.bot.send_photo(chat_id=chat_id, photo=img_resp.content, caption=f"📊 نمودار شمعی {coin} - {tf_fa} (FINVIZ)")
-                    chart_sent = True
-            except: pass
-            
-        if not chart_sent:
-            await context.bot.send_message(chat_id=chat_id, text="⚠️ متأسفانه در حال حاضر امکان دریافت تصویر نمودار وجود ندارد. متن تحلیل بالا ارسال شد.")
+                fallback_url = f"https://quickchart.io/chart?c={urllib.parse.quote(json.dumps(fallback_config))}&w=800&h=400&bkg=%23111111"
+                img_data = requests.get(fallback_url, timeout=15).content
+                await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 نمودار خطی {coin} - {tf_fa} (نسخه جایگزین)")
+        except:
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ خطا در ارسال نمودار.")
 
 # ... (بقیه کدهای هشدار، طلا و مدیریت متن‌ها دقیقاً مثل قبل است) ...
 # (برای جلوگیری از طولانی شدن، از همان کدهای قبلی استفاده کنید)

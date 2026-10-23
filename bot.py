@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import mplfinance as mpf
 import yfinance as yf
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -17,16 +17,16 @@ TOP_COINS = ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "L
 TRENDING_COINS = ["SOL", "PEPE", "DOGE", "WIF", "AVAX", "TON", "SHIB", "BONK", "FLOKI", "NOT"]
 
 user_alerts = {}
-user_state = {} 
-user_lang = {} 
+user_state = {}
+user_lang = {}
 
 TEXTS = {
     'fa': {
-        'welcome': "سلام! 🚀\nبه ربات پیشرفته **Coin Master** خوش آمدید.\nیک گزینه انتخاب کنید:\n\n"
-                   "━━━━━━━━━━━━━━━━━━\n"
-                   "👨‍💻 <b>توسعه‌دهنده:</b> صادق دوستی‌خواه\n"
-                   "📧 <b>ایمیل:</b> <code>S.doostikhah@gmail.com</code>\n"
-                   "━━━━━━━━━━━━━━━━━━",
+        'welcome': "سلام! 🚀\nبه ربات پیشرفته Coin Master خوش آمدید.\nیک گزینه انتخاب کنید:\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "👨‍💻 <b>توسعه‌دهنده:</b> صادق دوستی‌خواه\n"
+        "📧 <b>ایمیل:</b> <code>S.doostikhah@gmail.com</code>\n"
+        "━━━━━━━━━━━━━━━━━━",
         'top10': "۱۰ ارز برتر 📊", 'trend': "۱۰ ترند برتر 🔥", 'analysis': "تحلیل پیشرفته 📈",
         'alerts': "مدیریت هشدارها 🔔", 'markets': "طلا، ارز و نفت 🌍", 'help': "راهنما ❓",
         'lang': "تغییر زبان 🇬🇧", 'reset': "ریست 🔄",
@@ -55,11 +55,11 @@ TEXTS = {
         'alert_confirmed': "✅ هشدار با موفقیت ثبت شد.", 'alert_canceled': "❌ ثبت هشدار لغو شد."
     },
     'en': {
-        'welcome': "Hello! 🚀\nWelcome to the Advanced **Coin Master** Bot.\nChoose an option:\n\n"
-                   "━━━━━━━━━━━━━━━━━━\n"
-                   "👨‍💻 <b>Developer:</b> Sadegh Doostikhah\n"
-                   "📧 <b>Email:</b> <code>S.doostikhah@gmail.com</code>\n"
-                   "━━━━━━━━━━━━━━━━━━",
+        'welcome': "Hello! 🚀\nWelcome to the Advanced Coin Master Bot.\nChoose an option:\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "👨‍💻 <b>Developer:</b> Sadegh Doostikhah\n"
+        "📧 <b>Email:</b> <code>S.doostikhah@gmail.com</code>\n"
+        "━━━━━━━━━━━━━━━━━━",
         'top10': "Top 10 Coins 📊", 'trend': "Top 10 Trending 🔥", 'analysis': "Advanced Analysis 📈",
         'alerts': "Manage Alerts 🔔", 'markets': "Gold, Forex & Oil 🌍", 'help': "Help ❓",
         'lang': "Language 🇮🇷", 'reset': "Reset 🔄",
@@ -93,9 +93,8 @@ def get_lang(chat_id):
     return user_lang.get(chat_id, 'fa')
 
 def format_price(price):
-    if price < 1: return f"${price:,.6f}"
-    elif price < 100: return f"${price:,.4f}"
-    else: return f"${price:,.2f}"
+    if price < 1: return f"{price:,.4f}"
+    else: return f"$`{price:,.2f}"
 
 def get_time_str():
     tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
@@ -156,7 +155,8 @@ def get_klines_dataframe(symbol, timeframe='1H', limit=40):
                     "Low": float(c[3]), "Close": float(c[4]), "Volume": float(c[5])
                 })
             df = pd.DataFrame(data)
-            df.set_index('Date', inplace=True)
+            # اصلاح هشدار Pandas
+            df = df.set_index('Date')
             return df
     except: pass
     return None
@@ -167,7 +167,7 @@ def calculate_indicators(df):
     closes = df['Close'].tolist()
     highs = df['High'].tolist()
     lows = df['Low'].tolist()
-    
+
     gains, losses = 0, 0
     for i in range(len(closes) - 14, len(closes)):
         diff = closes[i] - closes[i-1]
@@ -175,14 +175,14 @@ def calculate_indicators(df):
         else: losses -= diff
     rs = (gains / 14) / (losses / 14) if losses > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
-    
+
     recent = closes[-20:]
     sma = sum(recent) / 20
     variance = sum((x - sma) ** 2 for x in recent) / 20
     std = variance ** 0.5
     results['bb_upper'] = sma + (2 * std)
     results['bb_lower'] = sma - (2 * std)
-    
+
     multiplier = 2 / (20 + 1)
     ema_line, ema = [], closes[0]
     for price in closes:
@@ -190,7 +190,7 @@ def calculate_indicators(df):
         ema_line.append(ema)
     results['ema'] = ema_line[-1]
     results['ema_line'] = ema_line
-    
+
     trs, plus_dms, minus_dms = [], [], []
     for i in range(1, len(df)):
         h, l, prev_c = highs[i], lows[i], closes[i-1]
@@ -221,7 +221,7 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
             if not d: continue
             cp = d['price']
             triggered = False
-            
+
             if a.get('type') == 'price':
                 if (a['direction'] == 'above' and cp >= a['target']) or (a['direction'] == 'below' and cp <= a['target']):
                     triggered = True
@@ -244,9 +244,9 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in user_lang: user_lang[chat_id] = 'fa'
-    user_state[chat_id] = {} 
+    user_state[chat_id] = {}
     t = TEXTS[get_lang(chat_id)]
-    
+
     kb = [
         [KeyboardButton(t['top10']), KeyboardButton(t['trend'])],
         [KeyboardButton(t['analysis']), KeyboardButton(t['alerts'])],
@@ -278,16 +278,17 @@ async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     chat_id = query.message.chat_id
     t = TEXTS[get_lang(chat_id)]
+    
     parts = query.data.split("_")
     list_type, tf = parts[1], parts[2]
     tf_fa = t.get(f"tf_{tf}", tf)
-    
+
     await query.edit_message_text(t['loading'])
     prices = fetch_prices()
     coins_to_process = TOP_COINS if list_type == "top10" else TRENDING_COINS
     title = t['top10'] if list_type == "top10" else t['trend']
     text = f"<b>{title}</b>\n🕒 {get_time_str()}\n⏱ <i>{t['change']} {tf_fa}</i>\n\n"
-    
+
     cnt = 0
     for c in coins_to_process:
         if cnt >= 10: break
@@ -317,25 +318,23 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
     chat_id = query.message.chat_id
     t = TEXTS[get_lang(chat_id)]
     data = query.data
-    
+
     if data.startswith("tf_"):
         tf_code = data.replace("tf_", "")
         state = user_state.get(chat_id)
         if not state or 'symbol' not in state: return
         coin = state['symbol']
-        
+
         if tf_code == "2D": okx_tf, limit, tf_fa = '1D', 2, t['tf_2D']
         elif tf_code == "3D": okx_tf, limit, tf_fa = '1D', 3, t['tf_3D']
         elif tf_code == "1W": okx_tf, limit, tf_fa = '1D', 7, t['tf_1W']
         elif tf_code == "1M": okx_tf, limit, tf_fa = '1D', 30, t['tf_1M']
-        else: 
-            okx_tf, limit, tf_fa = tf_code, 40, t.get(f"tf_{tf_code}", tf_code)
-        
+        else: okx_tf, limit, tf_fa = tf_code, 40, t.get(f"tf_{tf_code}", tf_code)
+
         await query.edit_message_text(t['loading'])
-        
+
         df = get_klines_dataframe(coin, okx_tf, limit)
-        
-        # --- سیستم جایگزین (Fallback) برای ارزهایی که داده تاریخی ندارند ---
+
         if df is None or df.empty:
             stats = get_okx_stats(coin)
             if stats:
@@ -347,17 +346,16 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
                 return await query.edit_message_text(msg, parse_mode='HTML')
             else:
                 return await query.edit_message_text(t['error_data'])
-        # ---------------------------------------------------------------------
-        
+
         ind = calculate_indicators(df)
         cp = df['Close'].iloc[-1]
         change_in_tf = ((cp - df['Close'].iloc[0]) / df['Close'].iloc[0]) * 100 if df['Close'].iloc[0] > 0 else 0
-        
+
         rsi = ind['rsi']
         if rsi > 70: rsi_txt = f"⚠️ {t['overbought']} ({rsi})"
         elif rsi < 30: rsi_txt = f"🟢 {t['oversold']} ({rsi})"
         else: rsi_txt = f"⚖️ {t['neutral']} ({rsi})"
-        
+
         bb_txt = f"🔴 {t['above_bb']}" if cp > ind['bb_upper'] else (f"🟢 {t['below_bb']}" if cp < ind['bb_lower'] else f"⚖️ {t['inside_bb']}")
         ema_txt = f"🟢 {t['above_ema']}" if cp > ind['ema'] else f"🔴 {t['below_ema']}"
         adx_txt = f"💪 {t['strong_trend']} ({ind['adx']})" if ind['adx'] > 25 else (f"🔀 {t['ranging_mkt']} ({ind['adx']})" if ind['adx'] < 20 else f"⚖️ ({ind['adx']})")
@@ -381,7 +379,7 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
             f"🎯 <b>{t['conclusion']}:</b> {conclusion}"
         )
         await query.edit_message_text(text, parse_mode='HTML')
-        
+
         try:
             mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit')
             custom_style = mpf.make_mpf_style(base_mpl_style="dark_background", marketcolors=mc, facecolor="#111111", figcolor="#111111", edgecolor="#888888", gridcolor="#333333", rc={"axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
@@ -407,19 +405,20 @@ async def handle_global_callback(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = query.message.chat_id
     t = TEXTS[get_lang(chat_id)]
     data = query.data
-    
+
     period_map = {"global_1d": "5d", "global_3d": "5d", "global_1w": "1mo", "global_1m": "3mo"}
     period = period_map.get(data, "5d")
     tf_fa = {"global_1d": t['tf_1D'], "global_3d": t['tf_3D'], "global_1w": t['tf_1W'], "global_1m": t['tf_1M']}.get(data, "")
-    
+
     await query.edit_message_text(t['loading'])
     try:
         tickers = {"GC=F": t['gold'], "SI=F": t['silver'], "BZ=F": t['brent'], "CL=F": t['wti']}
         text = f"🌍 <b>{t['global_title']} ({tf_fa})</b>\n━━━━━━━━━━━━━━━━━━\n"
-        
+
         for ticker, name in tickers.items():
             tick = yf.Ticker(ticker)
-            hist = tick.history(period=period, timeout=5)
+            # اصلاح تایم اوت yfinance برای جلوگیری از ارور
+            hist = tick.history(period=period)
             if len(hist) > 1:
                 idx = 1 if data == "global_1d" else (3 if data == "global_3d" else (7 if data == "global_1w" else 30))
                 open_price = hist['Open'].iloc[-idx] if len(hist) > idx else hist['Open'].iloc[0]
@@ -447,7 +446,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
     lang = get_lang(chat_id)
     t = TEXTS[lang]
     data = query.data
-    
+
     if data == "new_alert":
         user_state[chat_id] = {'step': 'choose_coin'}
         kb = []
@@ -460,7 +459,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         kb.append([InlineKeyboardButton(t['other_coin'], callback_data="alert_other")])
         kb.append([InlineKeyboardButton(t['cancel'], callback_data="alert_cancel")])
         await query.edit_message_text(t['select_coin'], reply_markup=InlineKeyboardMarkup(kb))
-        
+
     elif data == "view_alerts":
         alerts = user_alerts.get(chat_id, [])
         if not alerts: return await query.edit_message_text(t['no_alerts'])
@@ -470,7 +469,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
             type_fa = {"price": t['type_price'], "percent": t['type_percent'], "volatility": t['type_vol']}.get(a.get('type', 'price'))
             dir_fa = t['dir_above'] if a.get('direction') == 'above' else t['dir_below']
             target_str = format_price(a['target']) if a.get('type') == 'price' else f"{a['target']}%"
-            
+
             text += f"🔸 <b>{a['symbol']}</b> | {type_fa} {dir_fa} {target_str}\n"
             kb.append([
                 InlineKeyboardButton(f"✏️ {t['edit_alert']} {a['symbol']}", callback_data=f"edit_alert_{i}"),
@@ -484,18 +483,18 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
             user_alerts[chat_id].pop(idx)
             if not user_alerts[chat_id]: del user_alerts[chat_id]
-            await query.edit_message_text(t['deleted'])
-            await show_alerts_menu(query, context)
+        await query.edit_message_text(t['deleted'])
+        await show_alerts_menu(query, context)
 
     elif data.startswith("edit_alert_"):
         idx = int(data.replace("edit_alert_", ""))
         if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
             alert = user_alerts[chat_id][idx]
             user_state[chat_id] = {
-                'step': 'edit_target', 'alert_idx': idx, 'symbol': alert['symbol'], 
+                'step': 'edit_target', 'alert_idx': idx, 'symbol': alert['symbol'],
                 'type': alert.get('type', 'price'), 'direction': alert.get('direction', 'above')
             }
-            unit = "$" if alert.get('type') == 'price' else "%"
+            unit = "`$" if alert.get('type') == 'price' else "%"
             await query.edit_message_text(f"{t['edit_prompt']} ({unit})")
 
     elif data == "back_to_alerts":
@@ -509,7 +508,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         coin = data.replace("alertcoin_", "")
         stats = get_okx_stats(coin)
         if not stats: return await query.edit_message_text(t['error_data'])
-        
+
         user_state[chat_id] = {'step': 'choose_type', 'symbol': coin}
         kb = [
             [InlineKeyboardButton(t['type_price'], callback_data="type_price"), InlineKeyboardButton(t['type_percent'], callback_data="type_percent")],
@@ -533,7 +532,7 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         alert_type = data.replace("type_", "")
         state = user_state.get(chat_id)
         state['type'] = alert_type
-        
+
         if alert_type == 'volatility':
             state['step'] = 'enter_target'
             await query.edit_message_text(f"{t['enter_target']} (e.g. 5)" if lang=='en' else f"{t['enter_target']} (مثلاً 5 برای ۵٪)")
@@ -553,21 +552,21 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         state['step'] = 'enter_target'
         symbol = state['symbol']
         alert_type = state['type']
-        
+
         stats = get_okx_stats(symbol)
         current_price = stats['price'] if stats else 0
-        
+
         unit = "$" if alert_type == 'price' else "%"
         msg = f"{t['enter_target']} ({unit})\n\n"
         if alert_type == 'price':
             msg += f"{t['price']}: <code>{format_price(current_price)}</code>"
-            
+
         await query.edit_message_text(msg, parse_mode='HTML')
 
     elif data == "alert_cancel":
         user_state[chat_id] = {}
         await query.edit_message_text(t['cancel'])
-        
+
     elif data == "confirm_save_alert":
         state = user_state.get(chat_id)
         if state and 'temp_alert' in state:
@@ -575,10 +574,10 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if chat_id not in user_alerts: user_alerts[chat_id] = []
             user_alerts[chat_id] = [a for a in user_alerts[chat_id] if a['symbol'] != alert['symbol']]
             user_alerts[chat_id].append(alert)
-            
+
             await query.edit_message_text(t['alert_confirmed'])
             user_state[chat_id] = {}
-            
+
     elif data == "cancel_save_alert":
         user_state[chat_id] = {}
         await query.edit_message_text(t['alert_canceled'])
@@ -589,27 +588,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     up = txt.upper()
     lang = get_lang(chat_id)
     t = TEXTS[lang]
-    
+
     if txt in [TEXTS['fa']['reset'], TEXTS['en']['reset']]:
         user_state[chat_id] = {}
         return await update.message.reply_text(t['reset_msg'])
-    elif txt in [TEXTS['fa']['top10'], TEXTS['en']['top10']]: 
+    elif txt in [TEXTS['fa']['top10'], TEXTS['en']['top10']]:
         user_state[chat_id] = {}; await show_list_tf_menu(update, context, "top10"); return
-    elif txt in [TEXTS['fa']['trend'], TEXTS['en']['trend']]: 
+    elif txt in [TEXTS['fa']['trend'], TEXTS['en']['trend']]:
         user_state[chat_id] = {}; await show_list_tf_menu(update, context, "trend"); return
-    elif txt in [TEXTS['fa']['analysis'], TEXTS['en']['analysis']]: 
+    elif txt in [TEXTS['fa']['analysis'], TEXTS['en']['analysis']]:
         user_state[chat_id] = {}; await start_advanced_analysis(update, context); return
-    elif txt in [TEXTS['fa']['alerts'], TEXTS['en']['alerts']]: 
+    elif txt in [TEXTS['fa']['alerts'], TEXTS['en']['alerts']]:
         user_state[chat_id] = {}; await show_alerts_menu(update, context); return
-    elif txt in [TEXTS['fa']['markets'], TEXTS['en']['markets']]: 
+    elif txt in [TEXTS['fa']['markets'], TEXTS['en']['markets']]:
         user_state[chat_id] = {}; await show_global_markets_menu(update, context); return
-    elif txt in [TEXTS['fa']['help'], TEXTS['en']['help']]: 
+    elif txt in [TEXTS['fa']['help'], TEXTS['en']['help']]:
         user_state[chat_id] = {}; await help_command(update, context); return
-    elif txt in [TEXTS['fa']['lang'], TEXTS['en']['lang']]: 
+    elif txt in [TEXTS['fa']['lang'], TEXTS['en']['lang']]:
         user_state[chat_id] = {}; await change_lang(update, context); return
 
     state = user_state.get(chat_id, {})
-    
+
     if state.get('step') == 'analysis_type_coin':
         user_state[chat_id] = {'step': 'analysis_choose_tf', 'symbol': up}
         kb = [
@@ -623,7 +622,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(t['loading'])
         stats = get_okx_stats(up)
         if not stats: return await msg.edit_text(t['error_data'])
-        
+
         user_state[chat_id] = {'step': 'choose_type', 'symbol': up}
         kb = [
             [InlineKeyboardButton(t['type_price'], callback_data="type_price"), InlineKeyboardButton(t['type_percent'], callback_data="type_percent")],
@@ -646,25 +645,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state.get('step') in ['enter_target', 'edit_target']:
         try:
             target = float(txt)
-            
+
             if state.get('step') == 'edit_target':
                 idx = state['alert_idx']
                 if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
                     user_alerts[chat_id][idx]['target'] = target
                     await update.message.reply_text(t['alert_set'])
-                user_state[chat_id] = {}
-                return
+                    user_state[chat_id] = {}
+                    return
 
             symbol = state['symbol']
             direction = state.get('direction', 'above')
             alert_type = state.get('type', 'price')
-            
+
             stats = get_okx_stats(symbol)
             cp = stats['price'] if stats else 0
-            
+
             type_fa = {"price": t['type_price'], "percent": t['type_percent'], "volatility": t['type_vol']}.get(alert_type)
             dir_fa = t['dir_above'] if direction == 'above' else t['dir_below']
-            
+
             if alert_type == 'price':
                 preview_detail = f"{type_fa} {dir_fa} {format_price(target)}"
             elif alert_type == 'percent':
@@ -672,9 +671,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 preview_detail = f"{type_fa} {dir_fa} {target}% (معادل {format_price(final_price)})"
             else:
                 preview_detail = f"{type_fa} بیشتر از {target}%"
-                
+
             state['temp_alert'] = {'symbol': symbol, 'target': target, 'direction': direction, 'type': alert_type}
-            
+
             msg = (
                 f"{t['confirm_preview']}\n\n"
                 f"🪙 ارز: <b>{symbol}</b>\n"
@@ -686,26 +685,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 Current Price: <code>{format_price(cp)}</code>\n"
                 f"📝 Alert: {preview_detail}"
             )
-            
+
             kb = [
                 [InlineKeyboardButton(t['btn_confirm'], callback_data="confirm_save_alert")],
                 [InlineKeyboardButton(t['btn_cancel_confirm'], callback_data="cancel_save_alert")]
             ]
-            
+
             return await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-            
+
         except ValueError:
             return await update.message.reply_text("❌ Invalid number." if lang == 'en' else "❌ عدد معتبر وارد کنید.")
 
+
 if __name__ == '__main__':
     from telegram.request import HTTPXRequest
-    # افزایش زمان انتظار برای جلوگیری از قطع شدن اتصال و بیدار شدن سرور
-    request = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0, pool_timeout=30.0)
-    
+    request = HTTPXRequest(connect_timeout=15.0, read_timeout=15.0)
     app = ApplicationBuilder().token(TOKEN).request(request).build()
-    
+
     app.job_queue.run_repeating(check_alerts_job, interval=300, first=10)
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(handle_analysis_callback, pattern="^tf_"))
@@ -713,8 +711,6 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(handle_global_callback, pattern="^global_"))
     app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|type_|dir_|edit_alert_|del_alert_|back_to_alerts|alert_cancel|confirm_save_alert|cancel_save_alert)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
+
     print("✅ Bot is running!")
-    
-    # drop_pending_updates=False باعث می‌شود کلیک‌های شما در زمان بیدار شدن سرور دور ریخته نشوند
-    app.run_polling(drop_pending_updates=False, close_loop=False, bootstrap_retries=5)
+    app.run_polling(drop_pending_updates=True)

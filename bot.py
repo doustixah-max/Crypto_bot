@@ -212,7 +212,6 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         lows = [d['l'] for d in ohlc_data]
         
         ema_data = calculate_ema_data(closes, 20)
-        # پر کردن مقادیر خالی EMA برای هم‌ترازی با کندل‌ها
         ema_line = [d if d is not None else closes[0] for d in ema_data]
         
         ind = calculate_indicators(closes, highs, lows)
@@ -244,7 +243,6 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         elif score <= -2: summary = "🔴 <b>برآیند: نزولی</b>\nفشار فروشندگان بالاست."
         else: summary = "⚖️ <b>برآیند: خنثی</b>\nسیگنال‌های متناقض."
 
-        # متن فوق‌العاده منظم با استفاده از Blockquote
         text = (
             f"📈 <b>تحلیل {coin}</b> ({tf_fa})\n"
             f"<blockquote>"
@@ -293,16 +291,13 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         chart_url = f"https://quickchart.io/chart?c={encoded_config}&w=800&h=400&bkg=%23111111"
         
         try:
-            # دانلود عکس برای جلوگیری از خطای طولانی بودن URL
             img_data = requests.get(chart_url, timeout=15).content
-            # بررسی اینکه آیا عکس خطا (سفید) دریافت شده یا خیر
             if b"chart type requires" in img_data or b"error" in img_data.lower():
                 raise Exception("QuickChart Candlestick Error")
                 
             buf = io.BytesIO(img_data)
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
         except Exception as e:
-            # جایگزین (Fallback): اگر نمودار شمعی خطا داد، نمودار خطی ساده بفرست
             fallback_config = {
                 "type": "line",
                 "data": {
@@ -323,8 +318,8 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
             except:
                 pass
 
-# ... (بقیه کدهای هشدار، طلا و...) ...
-# (همان کدهای قبلی که کامل و بدون تغییر هستند)
+# ... (بقیه کدهای هشدار، طلا و مدیریت متن‌ها دقیقاً مثل قبل است) ...
+# (برای جلوگیری از طولانی شدن، از همان کدهای قبلی استفاده کنید)
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [

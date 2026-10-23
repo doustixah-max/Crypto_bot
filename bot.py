@@ -699,7 +699,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     from telegram.request import HTTPXRequest
-    request = HTTPXRequest(connect_timeout=15.0, read_timeout=15.0)
+    # افزایش زمان انتظار برای جلوگیری از قطع شدن اتصال و بیدار شدن سرور
+    request = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0, pool_timeout=30.0)
+    
     app = ApplicationBuilder().token(TOKEN).request(request).build()
     
     app.job_queue.run_repeating(check_alerts_job, interval=300, first=10)
@@ -713,4 +715,6 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     print("✅ Bot is running!")
-    app.run_polling(drop_pending_updates=True)
+    
+    # drop_pending_updates=False باعث می‌شود کلیک‌های شما در زمان بیدار شدن سرور دور ریخته نشوند
+    app.run_polling(drop_pending_updates=False, close_loop=False, bootstrap_retries=5)

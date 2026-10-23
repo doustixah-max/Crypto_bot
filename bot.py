@@ -206,24 +206,32 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- رسم نمودار شمعی با mplfinance ---
+        # --- رسم نمودار شمعی با mplfinance (نسخه سازگار با تمام نسخه‌ها) ---
         try:
             mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit', volume='in')
             
-            # رفع خطای fontcolor با استفاده از استایل استاندارد و تنظیم rc
-            s = mpf.make_mpf_style(
-                base_mpf_style='nightclouds', 
+            # استایل استاندارد و سازگار
+            custom_style = mpf.make_mpf_style(
+                base_mpl_style="dark_background",
                 marketcolors=mc,
-                rc={'font.color': 'white', 'axes.labelcolor': 'white', 'xtick.color': 'white', 'ytick.color': 'white', 'figure.facecolor': '#111111', 'axes.facecolor': '#111111'}
+                facecolor="#111111",
+                figcolor="#111111",
+                edgecolor="#888888",
+                gridcolor="#333333",
+                rc={
+                    "axes.labelcolor": "white",
+                    "xtick.color": "white",
+                    "ytick.color": "white"
+                }
             )
             
             buf = io.BytesIO()
-            mpf.plot(df, type='candle', mav=(20), style=s, savefig=buf, figsize=(10, 6), tight_layout=True)
+            mpf.plot(df, type='candle', mav=(20), style=custom_style, savefig=buf, figsize=(10, 6), tight_layout=True)
             buf.seek(0)
             
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}\n🟡 خط طلایی: EMA 20")
         except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار: {str(e)[:50]}")
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار: {str(e)[:100]}")
 
 # --- هشدارها (کامل) ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):

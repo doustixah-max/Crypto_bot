@@ -2,12 +2,8 @@ import os
 import requests
 import datetime
 import jdatetime
-import io
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import pandas as pd
-import mplfinance as mpf
+import json
+import urllib.parse
 import yfinance as yf
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -22,10 +18,14 @@ user_lang = {}
 
 TEXTS = {
     'fa': {
-        'welcome': "سلام! 🚀\nبه ربات پیشرفته کریپتو خوش آمدید.\nیک گزینه انتخاب کنید:",
+        'welcome': "سلام! 🚀\nبه ربات پیشرفته **Coin Master** خوش آمدید.\nیک گزینه انتخاب کنید:\n\n"
+                   "━━━━━━━━━━━━━━━━━━\n"
+                   "👨‍💻 <b>توسعه‌دهنده:</b> صادق دوستی‌خواه\n"
+                   "📧 <b>ایمیل:</b> <code>S.doostikhah@gmail.com</code>\n"
+                   "━━━━━━━━━━━━━━━━━━",
         'top10': "۱۰ ارز برتر 📊", 'trend': "۱۰ ترند برتر 🔥", 'analysis': "تحلیل پیشرفته 📈",
         'alerts': "مدیریت هشدارها 🔔", 'markets': "طلا، ارز و نفت 🌍", 'help': "راهنما ❓",
-        'dev': "درباره سازنده 👨‍💻", 'lang': "تغییر زبان 🇬🇧", 'reset': "ریست 🔄",
+        'lang': "تغییر زبان 🇬🇧", 'reset': "ریست 🔄",
         'select_tf': "⏱ لطفاً بازه زمانی را انتخاب کنید:", 'loading': "⏳ در حال دریافت...",
         'tf_1m': "۱ دقیقه", 'tf_5m': "۵ دقیقه", 'tf_15m': "۱۵ دقیقه", 'tf_30m': "۳۰ دقیقه",
         'tf_1H': "۱ ساعته", 'tf_4H': "۴ ساعته", 'tf_1D': "روزانه", 'tf_2D': "۲ روزه", 'tf_3D': "۳ روزه",
@@ -44,17 +44,21 @@ TEXTS = {
         'no_alerts': "شما هیچ هشدار فعالی ندارید.", 'edit_alert': "ویرایش", 'del_alert': "حذف",
         'edit_prompt': "عدد جدید هدف را وارد کنید:", 'deleted': "✅ هشدار با موفقیت حذف شد.",
         'global_title': "بازارهای جهانی", 'gold': "🥇 انس جهانی طلا", 'silver': "🥈 نقره", 'brent': "🛢 نفت برنت", 'wti': "🛢 نفت WTI",
-        'error_data': "❌ خطا در دریافت داده‌ها.", 'reset_msg': "منو ریست شد. /start را بزنید.",
-        'help_text': "🤖 <b>راهنمای ربات</b>\n\n📊 ۱۰ ارز برتر و ترندها (با انتخاب تایم‌فریم)\n📈 تحلیل تکنیکال (نمودار شمعی + اندیکاتورها)\n🔔 هشدار قیمت، درصد و نوسان (با قابلیت ویرایش و حذف)\n🌍 شاخص‌های جهانی (طلا، نفت، ...)\n\n💡 از دکمه‌های پایین استفاده کنید.",
+        'error_data': "❌ خطا در دریافت داده‌ها (سرور پاسخ نداد).", 'reset_msg': "منو ریست شد. /start را بزنید.",
+        'help_text': "🤖 <b>راهنمای ربات Coin Master</b>\n\n📊 ۱۰ ارز برتر و ترندها (با انتخاب تایم‌فریم)\n📈 تحلیل تکنیکال (نمودار شمعی + اندیکاتورها)\n🔔 هشدار قیمت، درصد و نوسان\n🌍 شاخص‌های جهانی (طلا، نفت، ...)\n\n💡 از دکمه‌های پایین استفاده کنید.",
         'confirm_preview': "📝 <b>پیش‌نمایش هشدار</b>\n\nآیا از ثبت این هشدار اطمینان دارید؟",
         'btn_confirm': "✅ تایید و ثبت", 'btn_cancel_confirm': "❌ لغو",
         'alert_confirmed': "✅ هشدار با موفقیت ثبت شد.", 'alert_canceled': "❌ ثبت هشدار لغو شد."
     },
     'en': {
-        'welcome': "Hello! 🚀\nWelcome to the Advanced Crypto Bot.\nChoose an option:",
+        'welcome': "Hello! 🚀\nWelcome to the Advanced **Coin Master** Bot.\nChoose an option:\n\n"
+                   "━━━━━━━━━━━━━━━━━━\n"
+                   "👨‍💻 <b>Developer:</b> Sadegh Doostikhah\n"
+                   "📧 <b>Email:</b> <code>S.doostikhah@gmail.com</code>\n"
+                   "━━━━━━━━━━━━━━━━━━",
         'top10': "Top 10 Coins 📊", 'trend': "Top 10 Trending 🔥", 'analysis': "Advanced Analysis 📈",
         'alerts': "Manage Alerts 🔔", 'markets': "Gold, Forex & Oil 🌍", 'help': "Help ❓",
-        'dev': "About Developer 👨‍💻", 'lang': "Language 🇮🇷", 'reset': "Reset 🔄",
+        'lang': "Language 🇮🇷", 'reset': "Reset 🔄",
         'select_tf': "⏱ Please select a timeframe:", 'loading': "⏳ Fetching data...",
         'tf_1m': "1m", 'tf_5m': "5m", 'tf_15m': "15m", 'tf_30m': "30m",
         'tf_1H': "1H", 'tf_4H': "4H", 'tf_1D': "1D", 'tf_2D': "2D", 'tf_3D': "3D",
@@ -73,8 +77,8 @@ TEXTS = {
         'no_alerts': "You have no active alerts.", 'edit_alert': "Edit", 'del_alert': "Delete",
         'edit_prompt': "Enter new target value:", 'deleted': "✅ Alert deleted successfully.",
         'global_title': "Global Markets", 'gold': "🥇 Gold (XAU)", 'silver': "🥈 Silver (XAG)", 'brent': "🛢 Brent Crude", 'wti': "🛢 WTI Crude",
-        'error_data': "❌ Error fetching data.", 'reset_msg': "Menu reset. Send /start.",
-        'help_text': "🤖 <b>Bot Help</b>\n\n📊 Top 10 & Trending (with timeframe)\n📈 Technical Analysis (Candlestick + Indicators)\n🔔 Price, Percent & Volatility Alerts (Edit/Delete enabled)\n🌍 Global Markets (Gold, Oil...)\n\n💡 Use the buttons below.",
+        'error_data': "❌ Error fetching data (server timeout).", 'reset_msg': "Menu reset. Send /start.",
+        'help_text': "🤖 <b>Coin Master Help</b>\n\n📊 Top 10 & Trending (with timeframe)\n📈 Technical Analysis (Candlestick + Indicators)\n🔔 Price, Percent & Volatility Alerts\n🌍 Global Markets (Gold, Oil...)\n\n💡 Use the buttons below.",
         'confirm_preview': "📝 <b>Alert Preview</b>\n\nAre you sure you want to set this alert?",
         'btn_confirm': "✅ Confirm & Save", 'btn_cancel_confirm': "❌ Cancel",
         'alert_confirmed': "✅ Alert successfully saved.", 'alert_canceled': "❌ Alert creation canceled."
@@ -97,7 +101,7 @@ def get_time_str():
 def fetch_prices():
     prices = {}
     try:
-        res = requests.get("https://api.wallex.ir/v1/markets", timeout=10).json()
+        res = requests.get("https://api.wallex.ir/v1/markets", timeout=5).json()
         if res.get('success'):
             for sym, data in res['result']['symbols'].items():
                 if sym.endswith("USDT"):
@@ -106,9 +110,8 @@ def fetch_prices():
     return prices
 
 def get_okx_stats(symbol):
-    """دریافت قیمت و نوسان 24 ساعته از OKX"""
     try:
-        res = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT", timeout=8).json()
+        res = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT", timeout=5).json()
         if res.get('code') == '0' and res.get('data'):
             d = res['data'][0]
             price = float(d['last'])
@@ -122,7 +125,7 @@ def get_okx_stats(symbol):
 def get_tf_data(symbol, timeframe):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit=24"
-        res = requests.get(url, timeout=8).json()
+        res = requests.get(url, timeout=5).json()
         if res.get('code') == '0' and len(res.get('data', [])) >= 1:
             open_price = float(res['data'][-1][1])
             current_price = float(res['data'][0][4])
@@ -134,31 +137,30 @@ def get_tf_data(symbol, timeframe):
     except: pass
     return 0, 0
 
-def get_klines_dataframe(symbol, timeframe='1H', limit=50):
+def get_klines_data(symbol, timeframe='1H', limit=40):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
-        res = requests.get(url, timeout=8).json()
+        res = requests.get(url, timeout=5).json()
         if res.get('code') == '0' and res.get('data'):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
+                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 data.append({
-                    "Date": datetime.datetime.fromtimestamp(ts/1000),
-                    "Open": float(c[1]), "High": float(c[2]),
-                    "Low": float(c[3]), "Close": float(c[4]), "Volume": float(c[5])
+                    "t": dt,
+                    "o": float(c[1]), "h": float(c[2]),
+                    "l": float(c[3]), "c": float(c[4])
                 })
-            df = pd.DataFrame(data)
-            df.set_index('Date', inplace=True)
-            return df
+            return data
     except: pass
-    return None
+    return []
 
-def calculate_indicators(df):
-    if len(df) < 20: return None
+def calculate_indicators(data):
+    if len(data) < 20: return None
     results = {}
-    closes = df['Close'].tolist()
-    highs = df['High'].tolist()
-    lows = df['Low'].tolist()
+    closes = [d['c'] for d in data]
+    highs = [d['h'] for d in data]
+    lows = [d['l'] for d in data]
     
     gains, losses = 0, 0
     for i in range(len(closes) - 14, len(closes)):
@@ -176,15 +178,14 @@ def calculate_indicators(df):
     results['bb_lower'] = sma - (2 * std)
     
     multiplier = 2 / (20 + 1)
-    ema_line, ema = [], closes[0]
+    ema, ema_line = closes[0], []
     for price in closes:
         ema = (price - ema) * multiplier + ema
         ema_line.append(ema)
     results['ema'] = ema_line[-1]
-    results['ema_line'] = ema_line
     
     trs, plus_dms, minus_dms = [], [], []
-    for i in range(1, len(df)):
+    for i in range(1, len(data)):
         h, l, prev_c = highs[i], lows[i], closes[i-1]
         prev_h, prev_l = highs[i-1], lows[i-1]
         trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
@@ -202,7 +203,6 @@ def calculate_indicators(df):
         results['adx'] = 0
     return results
 
-# --- هشدارهای پس‌زمینه ---
 async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
     if not user_alerts: return
     prices = fetch_prices()
@@ -234,22 +234,20 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
                 user_alerts[chat_id].remove(a)
         if chat_id in user_alerts and not user_alerts[chat_id]: del user_alerts[chat_id]
 
-# --- منوها ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in user_lang: user_lang[chat_id] = 'fa'
     user_state[chat_id] = {} 
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(chat_id)]
     
+    # حذف دکمه درباره سازنده و مرتب‌سازی منو
     kb = [
         [KeyboardButton(t['top10']), KeyboardButton(t['trend'])],
         [KeyboardButton(t['analysis']), KeyboardButton(t['alerts'])],
         [KeyboardButton(t['markets']), KeyboardButton(t['help'])],
-        [KeyboardButton(t['dev']), KeyboardButton(t['lang'])],
-        [KeyboardButton(t['reset'])]
+        [KeyboardButton(t['lang']), KeyboardButton(t['reset'])]
     ]
-    await update.message.reply_text(t['welcome'], reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+    await update.message.reply_text(t['welcome'], reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True), parse_mode='HTML')
 
 async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -257,12 +255,10 @@ async def change_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_chat.id)
-    await update.message.reply_text(TEXTS[lang]['help_text'], parse_mode='HTML')
+    await update.message.reply_text(TEXTS[get_lang(update.effective_chat.id)]['help_text'], parse_mode='HTML')
 
 async def show_list_tf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, list_type):
-    lang = get_lang(update.effective_chat.id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(update.effective_chat.id)]
     kb = [
         [InlineKeyboardButton(t['tf_1m'], callback_data=f"list_{list_type}_1m"), InlineKeyboardButton(t['tf_5m'], callback_data=f"list_{list_type}_5m")],
         [InlineKeyboardButton(t['tf_15m'], callback_data=f"list_{list_type}_15m"), InlineKeyboardButton(t['tf_30m'], callback_data=f"list_{list_type}_30m")],
@@ -274,12 +270,9 @@ async def show_list_tf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
     chat_id = query.message.chat_id
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
-    
-    parts = data.split("_")
+    t = TEXTS[get_lang(chat_id)]
+    parts = query.data.split("_")
     list_type, tf = parts[1], parts[2]
     tf_fa = t.get(f"tf_{tf}", tf)
     
@@ -287,7 +280,6 @@ async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     prices = fetch_prices()
     coins_to_process = TOP_COINS if list_type == "top10" else TRENDING_COINS
     title = t['top10'] if list_type == "top10" else t['trend']
-    
     text = f"<b>{title}</b>\n🕒 {get_time_str()}\n⏱ <i>{t['change']} {tf_fa}</i>\n\n"
     
     cnt = 0
@@ -307,11 +299,9 @@ async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             )
     await query.edit_message_text(text, parse_mode='HTML')
 
-# --- تحلیل پیشرفته ---
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    lang = get_lang(chat_id)
-    msg = "Enter coin symbol (e.g., BTC):" if lang == 'en' else "نام ارز را وارد کنید (مثلاً BTC):"
+    msg = "Enter coin symbol (e.g., BTC):" if get_lang(chat_id) == 'en' else "نام ارز را وارد کنید (مثلاً BTC):"
     await update.message.reply_text(msg)
     user_state[chat_id] = {'step': 'analysis_type_coin'}
 
@@ -319,8 +309,7 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(chat_id)]
     data = query.data
     
     if data.startswith("tf_"):
@@ -338,14 +327,12 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(t['loading'])
         
-        df = get_klines_dataframe(coin, okx_tf, limit)
-        if df is None or df.empty: return await query.edit_message_text(t['error_data'])
+        data_ohlc = get_klines_data(coin, okx_tf, limit)
+        if not data_ohlc: return await query.edit_message_text(t['error_data'])
         
-        ind = calculate_indicators(df)
-        data_price = fetch_prices().get(coin) or get_okx_stats(coin)
-        cp = data_price['price']
-        
-        change_in_tf = ((cp - df['Close'].iloc[0]) / df['Close'].iloc[0]) * 100 if df['Close'].iloc[0] > 0 else 0
+        ind = calculate_indicators(data_ohlc)
+        cp = data_ohlc[-1]['c']
+        change_in_tf = ((cp - data_ohlc[0]['c']) / data_ohlc[0]['c']) * 100 if data_ohlc[0]['c'] > 0 else 0
         
         rsi = ind['rsi']
         if rsi > 70: rsi_txt = f"⚠️ {t['overbought']} ({rsi})"
@@ -377,24 +364,32 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(text, parse_mode='HTML')
         
         try:
-            mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit')
-            custom_style = mpf.make_mpf_style(base_mpl_style="dark_background", marketcolors=mc, facecolor="#111111", figcolor="#111111", edgecolor="#888888", gridcolor="#333333", rc={"axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-            ap = mpf.make_addplot(ind['ema_line'], color='gold', width=1.5)
-            buf = io.BytesIO()
-            mpf.plot(df, type='candle', style=custom_style, addplot=ap, savefig=buf, figsize=(10, 6), tight_layout=True)
-            buf.seek(0)
-            plt.close('all')
-            await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 {coin} - {tf_fa}")
+            chart_config = {
+                "type": "candlestick",
+                "data": {
+                    "datasets": [{
+                        "label": coin,
+                        "data": data_ohlc,
+                        "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
+                    }]
+                },
+                "options": {
+                    "parsing": False,
+                    "scales": {"x": {"type": "time"}},
+                    "plugins": {"legend": {"display": False}}
+                }
+            }
+            encoded = urllib.parse.quote(json.dumps(chart_config))
+            chart_url = f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bkg=%23111111"
+            img_data = requests.get(chart_url, timeout=10).content
+            await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 {coin} - {tf_fa}")
         except Exception: pass
 
-# --- بازارهای جهانی ---
 async def show_global_markets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(update.effective_chat.id)]
     kb = [
-        [InlineKeyboardButton("24h" if lang=='en' else "۲۴ ساعته", callback_data="global_1d"), InlineKeyboardButton("3D" if lang=='en' else "۳ روزه", callback_data="global_3d")],
-        [InlineKeyboardButton("1W" if lang=='en' else "۱ هفته", callback_data="global_1w"), InlineKeyboardButton("1M" if lang=='en' else "۱ ماه", callback_data="global_1m")],
+        [InlineKeyboardButton("24h" if get_lang(update.effective_chat.id)=='en' else "۲۴ ساعته", callback_data="global_1d"), InlineKeyboardButton("3D" if get_lang(update.effective_chat.id)=='en' else "۳ روزه", callback_data="global_3d")],
+        [InlineKeyboardButton("1W" if get_lang(update.effective_chat.id)=='en' else "۱ هفته", callback_data="global_1w"), InlineKeyboardButton("1M" if get_lang(update.effective_chat.id)=='en' else "۱ ماه", callback_data="global_1m")],
     ]
     await update.message.reply_text(t['select_tf'], reply_markup=InlineKeyboardMarkup(kb))
 
@@ -402,8 +397,7 @@ async def handle_global_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(chat_id)]
     data = query.data
     
     period_map = {"global_1d": "5d", "global_3d": "5d", "global_1w": "1mo", "global_1m": "3mo"}
@@ -417,7 +411,7 @@ async def handle_global_callback(update: Update, context: ContextTypes.DEFAULT_T
         
         for ticker, name in tickers.items():
             tick = yf.Ticker(ticker)
-            hist = tick.history(period=period)
+            hist = tick.history(period=period, timeout=5)
             if len(hist) > 1:
                 idx = 1 if data == "global_1d" else (3 if data == "global_3d" else (7 if data == "global_1w" else 30))
                 open_price = hist['Open'].iloc[-idx] if len(hist) > idx else hist['Open'].iloc[0]
@@ -429,11 +423,9 @@ async def handle_global_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         await query.edit_message_text(t['error_data'])
 
-# --- سیستم هشدارها (با پیش‌نمایش و تایید) ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    lang = get_lang(chat_id)
-    t = TEXTS[lang]
+    t = TEXTS[get_lang(chat_id)]
     kb = [
         [InlineKeyboardButton(t['alert_new'], callback_data="new_alert")],
         [InlineKeyboardButton(t['alert_view'], callback_data="view_alerts")]
@@ -568,7 +560,6 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         user_state[chat_id] = {}
         await query.edit_message_text(t['cancel'])
         
-    # --- دکمه‌های تایید نهایی ---
     elif data == "confirm_save_alert":
         state = user_state.get(chat_id)
         if state and 'temp_alert' in state:
@@ -583,11 +574,6 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "cancel_save_alert":
         user_state[chat_id] = {}
         await query.edit_message_text(t['alert_canceled'])
-
-async def about_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(update.effective_chat.id)
-    text = "👨‍💻 <b>Sadegh Doostikhah</b>\n📧 <code>S.doostikhah@gmail.com</code>" if lang == 'en' else "👨‍💻 <b>صادق دوستی‌خواه</b>\n📧 <code>S.doostikhah@gmail.com</code>"
-    await update.message.reply_text(text, parse_mode='HTML')
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -609,8 +595,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[chat_id] = {}; await show_alerts_menu(update, context); return
     elif txt in [TEXTS['fa']['markets'], TEXTS['en']['markets']]: 
         user_state[chat_id] = {}; await show_global_markets_menu(update, context); return
-    elif txt in [TEXTS['fa']['dev'], TEXTS['en']['dev']]: 
-        user_state[chat_id] = {}; await about_developer(update, context); return
     elif txt in [TEXTS['fa']['help'], TEXTS['en']['help']]: 
         user_state[chat_id] = {}; await help_command(update, context); return
     elif txt in [TEXTS['fa']['lang'], TEXTS['en']['lang']]: 
@@ -628,8 +612,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(f"{up}. {t['select_tf']}", reply_markup=InlineKeyboardMarkup(kb))
 
     if state.get('step') == 'type_coin':
+        msg = await update.message.reply_text(t['loading'])
         stats = get_okx_stats(up)
-        if not stats: return await update.message.reply_text(t['error_data'])
+        if not stats: return await msg.edit_text(t['error_data'])
         
         user_state[chat_id] = {'step': 'choose_type', 'symbol': up}
         kb = [
@@ -637,7 +622,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(t['type_vol'], callback_data="type_volatility")],
             [InlineKeyboardButton(t['cancel'], callback_data="alert_cancel")]
         ]
-        msg = (
+        msg_text = (
             f"ارز: <b>{up}</b>\n"
             f"💰 {t['price']}: <code>{format_price(stats['price'])}</code>\n"
             f"🌊 {t['vol']} 24h: <code>{stats['vol_24h']:.2f}%</code>\n\n"
@@ -648,7 +633,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🌊 {t['vol']} 24h: <code>{stats['vol_24h']:.2f}%</code>\n\n"
             f"{t['alert_type']}"
         )
-        return await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        return await msg.edit_text(msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
     if state.get('step') in ['enter_target', 'edit_target']:
         try:
@@ -666,7 +651,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             direction = state.get('direction', 'above')
             alert_type = state.get('type', 'price')
             
-            # --- ساخت پیش‌نمایش ---
             stats = get_okx_stats(symbol)
             cp = stats['price'] if stats else 0
             
@@ -674,8 +658,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dir_fa = t['dir_above'] if direction == 'above' else t['dir_below']
             
             if alert_type == 'price':
-                target_str = format_price(target)
-                preview_detail = f"{type_fa} {dir_fa} {target_str}"
+                preview_detail = f"{type_fa} {dir_fa} {format_price(target)}"
             elif alert_type == 'percent':
                 final_price = cp * (1 + target/100) if direction == 'above' else cp * (1 - target/100)
                 preview_detail = f"{type_fa} {dir_fa} {target}% (معادل {format_price(final_price)})"

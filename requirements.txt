@@ -1,5 +1,5 @@
-python-telegram-bot[job-queue]
+python-telegram-bot
 requests
 jdatetime
 staypresent[prod]
-matplotlib
+httpx

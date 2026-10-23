@@ -59,8 +59,7 @@ def get_klines_ohlc(symbol, timeframe='1H', limit=40):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
-                # استفاده از فرمت استاندارد تاریخ برای جلوگیری از خطای QuickChart
-                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M')
+                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%m-%d %H:%M')
                 data.append({
                     "x": dt,
                     "o": float(c[1]),
@@ -76,7 +75,6 @@ def calculate_indicators(closes, highs, lows):
     if len(closes) < 20: return None
     results = {}
     
-    # 1. RSI
     period_rsi = 14
     gains, losses = 0, 0
     for i in range(len(closes) - period_rsi, len(closes)):
@@ -86,7 +84,6 @@ def calculate_indicators(closes, highs, lows):
     rs = (gains / period_rsi) / (losses / period_rsi) if losses > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # 2. Bollinger Bands
     period_bb = 20
     recent_closes = closes[-period_bb:]
     sma = sum(recent_closes) / period_bb
@@ -95,20 +92,16 @@ def calculate_indicators(closes, highs, lows):
     results['bb_upper'] = sma + (2 * std_dev)
     results['bb_lower'] = sma - (2 * std_dev)
     
-    # 3. EMA (20)
     multiplier = 2 / (20 + 1)
     ema = closes[0]
     for price in closes[1:]:
         ema = (price - ema) * multiplier + ema
     results['ema'] = ema
     
-    # 4. ADX (شبیه‌سازی شده)
     trs = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
     avg_tr = sum(trs[-14:]) / 14
     price_change = abs(closes[-1] - closes[-14])
     results['adx'] = (price_change / avg_tr) * 10 if avg_tr > 0 else 0
-    
-    # 5. سقف و کف
     results['highest'] = max(highs)
     results['lowest'] = min(lows)
     
@@ -219,77 +212,74 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         lows = [d['l'] for d in ohlc_data]
         
         ema_data = calculate_ema_data(closes, 20)
-        # فیلتر کردن داده‌های خالی برای جلوگیری از خطای نمودار
-        ema_dataset = [{"x": ohlc_data[i]['x'], "y": ema_data[i]} for i in range(len(ohlc_data)) if ema_data[i] is not None]
+        # پر کردن مقادیر خالی EMA برای هم‌ترازی با کندل‌ها
+        ema_line = [d if d is not None else closes[0] for d in ema_data]
         
         ind = calculate_indicators(closes, highs, lows)
         data_price = fetch_prices().get(coin) or get_okx(coin)
         current_price = data_price['price']
         
-        # --- تفسیر اندیکاتورها ---
         rsi = ind['rsi']
         if rsi > 70: rsi_txt = f"⚠️ اشباع خرید ({rsi})"
         elif rsi < 30: rsi_txt = f"🟢 اشباع فروش ({rsi})"
         else: rsi_txt = f"⚖️ خنثی ({rsi})"
         
-        if current_price > ind['bb_upper']: bb_txt = "🔴 بالاتر از سقف (احتمال ریزش)"
-        elif current_price < ind['bb_lower']: bb_txt = "🟢 پایین‌تر از کف (احتمال رشد)"
-        else: bb_txt = "⚖️ داخل باندها (نوسان عادی)"
+        if current_price > ind['bb_upper']: bb_txt = "🔴 بالاتر از سقف"
+        elif current_price < ind['bb_lower']: bb_txt = "🟢 پایین‌تر از کف"
+        else: bb_txt = "⚖️ داخل باندها"
         
-        ema_txt = "🟢 بالای EMA (روند صعودی)" if current_price > ind['ema'] else "🔴 زیر EMA (روند نزولی)"
+        ema_txt = "🟢 بالای EMA (صعودی)" if current_price > ind['ema'] else "🔴 زیر EMA (نزولی)"
         
         adx = ind['adx']
         if adx > 25: adx_txt = f"💪 روند قوی ({adx:.2f})"
         elif adx < 20: adx_txt = f"🔀 بازار رِنج ({adx:.2f})"
         else: adx_txt = f"⚖️ شکل‌گیری روند ({adx:.2f})"
         
-        # --- محاسبه برآیند ---
         score = 0
         if rsi < 30 or current_price < ind['bb_lower'] or current_price > ind['ema']: score += 1
         if rsi > 70 or current_price > ind['bb_upper'] or current_price < ind['ema']: score -= 1
         
-        if adx < 20:
-            summary = "⚠️ <b>برآیند نهایی: بازار رِنج است.</b>\nسیگنال‌ها در این وضعیت قابل اعتماد نیستند."
-        elif score >= 2:
-            summary = "🟢 <b>برآیند نهایی: صعودی</b>\nترکیب اندیکاتورها قدرت خریداران را نشان می‌دهد."
-        elif score <= -2:
-            summary = "🔴 <b>برآیند نهایی: نزولی</b>\nترکیب اندیکاتورها فشار فروشندگان را نشان می‌دهد."
-        else:
-            summary = "⚖️ <b>برآیند نهایی: خنثی</b>\nسیگنال‌های متناقض هستند، منتظر بمانید."
+        if adx < 20: summary = "⚠️ <b>برآیند: بازار رِنج است.</b>\nسیگنال‌ها قابل اعتماد نیستند."
+        elif score >= 2: summary = "🟢 <b>برآیند: صعودی</b>\nقدرت خریداران مشهود است."
+        elif score <= -2: summary = "🔴 <b>برآیند: نزولی</b>\nفشار فروشندگان بالاست."
+        else: summary = "⚖️ <b>برآیند: خنثی</b>\nسیگنال‌های متناقض."
 
-        # --- متن بسیار مرتب و خوانا ---
+        # متن فوق‌العاده منظم با استفاده از Blockquote
         text = (
-            f"📈 <b>تحلیل جامع {coin}</b> ({tf_fa})\n"
-            f"➖➖➖➖➖➖➖➖\n"
+            f"📈 <b>تحلیل {coin}</b> ({tf_fa})\n"
+            f"<blockquote>"
             f"💰 <b>قیمت لحظه‌ای:</b> {format_price(current_price)}\n"
             f"📊 <b>تغییر ۲۴س:</b> {data_price['change']:+.2f}%\n"
             f"⬆️ <b>سقف بازه:</b> {format_price(ind['highest'])}\n"
-            f"⬇️ <b>کف بازه:</b> {format_price(ind['lowest'])}\n"
-            f"➖➖➖➖➖➖➖➖\n"
-            f"<b>📉 وضعیت اندیکاتورها:</b>\n\n"
-            f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
-            f"2️⃣ <b>بولینگر:</b>\n   {bb_txt}\n\n"
-            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n\n"
-            f"4️⃣ <b>ADX:</b>\n   {adx_txt}\n"
-            f"➖➖➖➖➖➖➖➖\n"
-            f"{summary}"
+            f"⬇️ <b>کف بازه:</b> {format_price(ind['lowest'])}"
+            f"</blockquote>\n"
+            f"<b>📉 اندیکاتورها:</b>\n"
+            f"1️⃣ <b>RSI:</b> {rsi_txt}\n"
+            f"2️⃣ <b>بولینگر:</b> {bb_txt}\n"
+            f"3️⃣ <b>EMA:</b> {ema_txt}\n"
+            f"4️⃣ <b>ADX:</b> {adx_txt}\n\n"
+            f"🎯 {summary}"
         )
         
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- ساخت نمودار ---
+        # --- فرمت استاندارد داده‌های شمعی برای QuickChart ---
+        labels = [d['x'] for d in ohlc_data]
+        candle_data = [[d['o'], d['h'], d['l'], d['c']] for d in ohlc_data]
+        
         chart_config = {
             "type": "candlestick",
             "data": {
+                "labels": labels,
                 "datasets": [
                     {
-                        "label": "Price",
-                        "data": ohlc_data
+                        "label": coin,
+                        "data": candle_data
                     },
                     {
                         "type": "line",
                         "label": "EMA 20",
-                        "data": ema_dataset,
+                        "data": ema_line,
                         "borderColor": "#d4af37",
                         "borderWidth": 2,
                         "fill": False,
@@ -297,26 +287,44 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
                     }
                 ]
             },
-            "options": {
-                "plugins": {"legend": {"display": False}},
-                "scales": {
-                    "x": {"type": "category"},
-                    "y": {"type": "linear"}
-                }
-            }
+            "options": {"plugins": {"legend": {"display": False}}}
         }
         encoded_config = urllib.parse.quote(json.dumps(chart_config))
         chart_url = f"https://quickchart.io/chart?c={encoded_config}&w=800&h=400&bkg=%23111111"
         
         try:
+            # دانلود عکس برای جلوگیری از خطای طولانی بودن URL
             img_data = requests.get(chart_url, timeout=15).content
+            # بررسی اینکه آیا عکس خطا (سفید) دریافت شده یا خیر
+            if b"chart type requires" in img_data or b"error" in img_data.lower():
+                raise Exception("QuickChart Candlestick Error")
+                
             buf = io.BytesIO(img_data)
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
         except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در دریافت نمودار. متن تحلیل ارسال شد.")
+            # جایگزین (Fallback): اگر نمودار شمعی خطا داد، نمودار خطی ساده بفرست
+            fallback_config = {
+                "type": "line",
+                "data": {
+                    "labels": labels,
+                    "datasets": [{
+                        "label": coin,
+                        "data": closes,
+                        "borderColor": "#00ff00",
+                        "fill": False
+                    }]
+                }
+            }
+            fallback_url = f"https://quickchart.io/chart?c={urllib.parse.quote(json.dumps(fallback_config))}&w=800&h=400&bkg=%23111111"
+            try:
+                img_data = requests.get(fallback_url, timeout=15).content
+                buf = io.BytesIO(img_data)
+                await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار خطی {coin} - {tf_fa} (نسخه جایگزین)")
+            except:
+                pass
 
-# ... (بقیه کدهای هشدار، طلا، ارز و مدیریت متن‌ها دقیقاً مثل قبل است) ...
-
+# ... (بقیه کدهای هشدار، طلا و...) ...
+# (همان کدهای قبلی که کامل و بدون تغییر هستند)
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [

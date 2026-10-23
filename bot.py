@@ -49,7 +49,7 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines_ohlc(symbol, timeframe='1H', limit=40):
+def get_klines(symbol, timeframe='1H', limit=50):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
@@ -57,9 +57,10 @@ def get_klines_ohlc(symbol, timeframe='1H', limit=40):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
-                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%m-%d %H:%M')
+                # فرمت ISO برای QuickChart
+                dt_iso = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 data.append({
-                    "x": dt,
+                    "t": dt_iso, # کلید t برای زمان
                     "o": float(c[1]),
                     "h": float(c[2]),
                     "l": float(c[3]),
@@ -74,16 +75,16 @@ def calculate_indicators(closes):
     results = {}
     
     # RSI
-    period_rsi = 14
+    period = 14
     gains, losses = 0, 0
-    for i in range(len(closes) - period_rsi, len(closes)):
+    for i in range(len(closes) - period, len(closes)):
         diff = closes[i] - closes[i-1]
         if diff > 0: gains += diff
         else: losses -= diff
-    rs = (gains / period_rsi) / (losses / period_rsi) if losses > 0 else 100
+    rs = (gains / period) / (losses / period) if losses > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # EMA
+    # EMA 20
     multiplier = 2 / (20 + 1)
     ema = closes[0]
     ema_values = []
@@ -162,10 +163,11 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         okx_tf = tf_map.get(timeframe, '1H')
         tf_labels = {'1m': '۱ دقیقه', '5m': '۵ دقیقه', '15m': '۱۵ دقیقه', '30m': '۳۰ دقیقه', '1H': '۱ ساعته', '4H': '۴ ساعته', '1D': 'روزانه'}
         tf_fa = tf_labels.get(timeframe, timeframe)
+        unit = 'hour' if timeframe in ['1H', '4H'] else ('day' if timeframe == '1D' else 'minute')
         
         await query.edit_message_text(f"⏳ در حال تحلیل {coin} ({tf_fa})...")
         
-        ohlc_data = get_klines_ohlc(coin, okx_tf, 40)
+        ohlc_data = get_klines(coin, okx_tf, 40)
         if not ohlc_data: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
         closes = [d['c'] for d in ohlc_data]
@@ -190,7 +192,6 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         elif score <= -2: summary = "🔴 <b>برآیند: نزولی</b>"
         else: summary = "⚖️ <b>برآیند: خنثی</b>"
 
-        # --- متن کاملاً تفکیک شده ---
         text = (
             f"📈 <b>تحلیل جامع {coin}</b> ({tf_fa})\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -207,86 +208,58 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(text, parse_mode='HTML')
         
         # =========================================================
-        # سیستم سه لایه برای ارسال نمودار
+        # نمودار شمعی با فرمت استاندارد (t, o, h, l, c) و parsing: false
         # =========================================================
-        labels = [d['x'] for d in ohlc_data]
-        ema_line = [d if d is not None else closes[0] for d in ind['ema_line']]
+        chart_sent = False
         
-        # لایه اول: نمودار شمعی با فرمت استاندارد آرایه‌ای
-        candle_data = [[d['o'], d['h'], d['l'], d['c']] for d in ohlc_data]
+        # لایه اول: شمعی
         chart_config = {
             "type": "candlestick",
             "data": {
-                "labels": labels,
-                "datasets": [
-                    {
-                        "label": coin,
-                        "data": candle_data,
-                        "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
-                    },
-                    {
-                        "type": "line",
-                        "label": "EMA 20",
-                        "data": ema_line,
-                        "borderColor": "#d4af37",
-                        "borderWidth": 2,
-                        "fill": False,
-                        "pointRadius": 0
-                    }
-                ]
+                "datasets": [{
+                    "label": coin,
+                    "data": ohlc_data,
+                    "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}
+                }]
             },
             "options": {
-                "plugins": {"legend": {"display": False}},
-                "scales": {"x": {"type": "category"}}
+                "parsing": False, # مهم: برای خواندن مستقیم فیلدهای t,o,h,l,c
+                "scales": {"x": {"type": "time", "time": {"unit": unit}}},
+                "plugins": {"legend": {"display": False}}
             }
         }
         encoded = urllib.parse.quote(json.dumps(chart_config))
         chart_url = f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bkg=%23111111"
         
         try:
-            img_resp = requests.get(chart_url, timeout=15)
-            # لایه دوم: اگر عکس خطا (سفید) بود (حجم زیر 5 کیلوبایت)، آن را دور بریز
-            if len(img_resp.content) < 5000:
-                raise Exception("QuickChart Candlestick Error")
-                
-            await context.bot.send_photo(chat_id=chat_id, photo=img_resp.content, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
-            
-        except Exception:
-            # لایه سوم: رسم نمودار خطی حرفه‌ای (بدون خطا)
+            resp = requests.get(chart_url, timeout=15)
+            if resp.status_code == 200 and len(resp.content) > 10000:
+                await context.bot.send_photo(chat_id=chat_id, photo=resp.content, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
+                chart_sent = True
+        except: pass
+        
+        # لایه دوم: اگر شمعی خطا داد، نمودار خطی بفرست
+        if not chart_sent:
+            labels = [d['t'] for d in ohlc_data]
+            ema_line = [d if d is not None else closes[0] for d in ind['ema_line']]
             fallback_config = {
                 "type": "line",
                 "data": {
                     "labels": labels,
                     "datasets": [
-                        {
-                            "label": coin,
-                            "data": closes,
-                            "borderColor": "#00ff00",
-                            "backgroundColor": "rgba(0, 255, 0, 0.1)",
-                            "fill": True,
-                            "borderWidth": 2,
-                            "pointRadius": 0
-                        },
-                        {
-                            "label": "EMA 20",
-                            "data": ema_line,
-                            "borderColor": "#d4af37",
-                            "borderWidth": 2,
-                            "fill": False,
-                            "pointRadius": 0
-                        }
+                        {"label": coin, "data": closes, "borderColor": "#00ff00", "backgroundColor": "rgba(0,255,0,0.1)", "fill": True, "borderWidth": 2, "pointRadius": 0},
+                        {"label": "EMA 20", "data": ema_line, "borderColor": "#d4af37", "borderWidth": 2, "fill": False, "pointRadius": 0}
                     ]
                 },
                 "options": {"plugins": {"legend": {"display": False}}}
             }
             fallback_url = f"https://quickchart.io/chart?c={urllib.parse.quote(json.dumps(fallback_config))}&w=800&h=400&bkg=%23111111"
             try:
-                img_data = requests.get(fallback_url, timeout=15).content
-                await context.bot.send_photo(chat_id=chat_id, photo=img_data, caption=f"📊 نمودار روند {coin} - {tf_fa} (نسخه جایگزین)")
-            except:
-                await context.bot.send_message(chat_id=chat_id, text="⚠️ خطا در ارسال نمودار.")
+                resp2 = requests.get(fallback_url, timeout=15)
+                await context.bot.send_photo(chat_id=chat_id, photo=resp2.content, caption=f"📊 نمودار روند {coin} - {tf_fa} (نسخه جایگزین)")
+            except: pass
 
-# --- هشدارها (کامل و مرحله به مرحله) ---
+# --- هشدارها (کامل) ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [

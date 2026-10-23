@@ -51,7 +51,7 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines_ohlc(symbol, timeframe='1H', limit=50):
+def get_klines_ohlc(symbol, timeframe='1H', limit=40):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
@@ -59,8 +59,15 @@ def get_klines_ohlc(symbol, timeframe='1H', limit=50):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
-                dt = datetime.datetime.fromtimestamp(ts/1000).strftime('%m-%d %H:%M')
-                data.append({"x": dt, "o": float(c[1]), "h": float(c[2]), "l": float(c[3]), "c": float(c[4])})
+                # استفاده از فرمت استاندارد تاریخ برای جلوگیری از خطای QuickChart
+                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M')
+                data.append({
+                    "x": dt,
+                    "o": float(c[1]),
+                    "h": float(c[2]),
+                    "l": float(c[3]),
+                    "c": float(c[4])
+                })
             return data
     except: pass
     return []
@@ -107,7 +114,7 @@ def calculate_indicators(closes, highs, lows):
     
     return results
 
-def calculate_ema(closes, period=20):
+def calculate_ema_data(closes, period=20):
     if len(closes) < period: return []
     multiplier = 2 / (period + 1)
     ema_values = []
@@ -179,7 +186,7 @@ async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"<b>{c}</b> {icon}\n💰 قیمت لحظه‌ای: {format_price(d['price'])}\n📊 تغییر ۲۴س: {d['change']:+.2f}%\n➖➖➖➖➖➖\n"
     await msg.edit_text(text, parse_mode='HTML')
 
-# --- تحلیل پیشرفته (مهم‌ترین بخش اصلاح‌شده) ---
+# --- تحلیل پیشرفته ---
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("📈 نام ارز را وارد کنید (مثلاً BTC):")
@@ -204,54 +211,53 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(f"⏳ در حال تحلیل {coin} در تایم‌فریم {tf_fa}...")
         
-        ohlc_data = get_klines_ohlc(coin, okx_tf, 50)
+        ohlc_data = get_klines_ohlc(coin, okx_tf, 40)
         if not ohlc_data: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
         closes = [d['c'] for d in ohlc_data]
         highs = [d['h'] for d in ohlc_data]
         lows = [d['l'] for d in ohlc_data]
         
-        ema_data = calculate_ema(closes, 20)
+        ema_data = calculate_ema_data(closes, 20)
+        # فیلتر کردن داده‌های خالی برای جلوگیری از خطای نمودار
+        ema_dataset = [{"x": ohlc_data[i]['x'], "y": ema_data[i]} for i in range(len(ohlc_data)) if ema_data[i] is not None]
+        
         ind = calculate_indicators(closes, highs, lows)
         data_price = fetch_prices().get(coin) or get_okx(coin)
         current_price = data_price['price']
         
         # --- تفسیر اندیکاتورها ---
-        # RSI
         rsi = ind['rsi']
         if rsi > 70: rsi_txt = f"⚠️ اشباع خرید ({rsi})"
         elif rsi < 30: rsi_txt = f"🟢 اشباع فروش ({rsi})"
         else: rsi_txt = f"⚖️ خنثی ({rsi})"
         
-        # Bollinger
-        if current_price > ind['bb_upper']: bb_txt = "🔴 بالاتر از سقف بولینگر"
-        elif current_price < ind['bb_lower']: bb_txt = "🟢 پایین‌تر از کف بولینگر"
-        else: bb_txt = "⚖️ داخل باندهای بولینگر"
+        if current_price > ind['bb_upper']: bb_txt = "🔴 بالاتر از سقف (احتمال ریزش)"
+        elif current_price < ind['bb_lower']: bb_txt = "🟢 پایین‌تر از کف (احتمال رشد)"
+        else: bb_txt = "⚖️ داخل باندها (نوسان عادی)"
         
-        # EMA
-        ema_txt = "🟢 بالای EMA (صعودی)" if current_price > ind['ema'] else "🔴 زیر EMA (نزولی)"
+        ema_txt = "🟢 بالای EMA (روند صعودی)" if current_price > ind['ema'] else "🔴 زیر EMA (روند نزولی)"
         
-        # ADX
         adx = ind['adx']
         if adx > 25: adx_txt = f"💪 روند قوی ({adx:.2f})"
         elif adx < 20: adx_txt = f"🔀 بازار رِنج ({adx:.2f})"
         else: adx_txt = f"⚖️ شکل‌گیری روند ({adx:.2f})"
         
-        # --- محاسبه برآیند (Summary) ---
+        # --- محاسبه برآیند ---
         score = 0
         if rsi < 30 or current_price < ind['bb_lower'] or current_price > ind['ema']: score += 1
         if rsi > 70 or current_price > ind['bb_upper'] or current_price < ind['ema']: score -= 1
         
         if adx < 20:
-            summary = "⚠️ <b>برآیند: بازار رِنج است.</b>\nسیگنال‌های خرید و فروش در این وضعیت قابل اعتماد نیستند."
+            summary = "⚠️ <b>برآیند نهایی: بازار رِنج است.</b>\nسیگنال‌ها در این وضعیت قابل اعتماد نیستند."
         elif score >= 2:
-            summary = "🟢 <b>برآیند: صعودی</b>\nترکیب اندیکاتورها نشان‌دهنده قدرت خریداران است."
+            summary = "🟢 <b>برآیند نهایی: صعودی</b>\nترکیب اندیکاتورها قدرت خریداران را نشان می‌دهد."
         elif score <= -2:
-            summary = "🔴 <b>برآیند: نزولی</b>\nترکیب اندیکاتورها نشان‌دهنده فشار فروشندگان است."
+            summary = "🔴 <b>برآیند نهایی: نزولی</b>\nترکیب اندیکاتورها فشار فروشندگان را نشان می‌دهد."
         else:
-            summary = "⚖️ <b>برآیند: خنثی</b>\nسیگنال‌های متناقض هستند، بهتر است منتظر ماند."
+            summary = "⚖️ <b>برآیند نهایی: خنثی</b>\nسیگنال‌های متناقض هستند، منتظر بمانید."
 
-        # --- ساخت متن زیبا و منظم ---
+        # --- متن بسیار مرتب و خوانا ---
         text = (
             f"📈 <b>تحلیل جامع {coin}</b> ({tf_fa})\n"
             f"➖➖➖➖➖➖➖➖\n"
@@ -260,40 +266,57 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
             f"⬆️ <b>سقف بازه:</b> {format_price(ind['highest'])}\n"
             f"⬇️ <b>کف بازه:</b> {format_price(ind['lowest'])}\n"
             f"➖➖➖➖➖➖➖➖\n"
-            f"<b>📉 وضعیت اندیکاتورها:</b>\n"
-            f"1️⃣ <b>RSI:</b> {rsi_txt}\n"
-            f"2️⃣ <b>بولینگر:</b> {bb_txt}\n"
-            f"3️⃣ <b>EMA:</b> {ema_txt}\n"
-            f"4️⃣ <b>ADX:</b> {adx_txt}\n"
+            f"<b>📉 وضعیت اندیکاتورها:</b>\n\n"
+            f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
+            f"2️⃣ <b>بولینگر:</b>\n   {bb_txt}\n\n"
+            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n\n"
+            f"4️⃣ <b>ADX:</b>\n   {adx_txt}\n"
             f"➖➖➖➖➖➖➖➖\n"
             f"{summary}"
         )
         
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- ساخت و ارسال نمودار ---
+        # --- ساخت نمودار ---
         chart_config = {
             "type": "candlestick",
             "data": {
                 "datasets": [
-                    {"label": f"{coin} Price", "data": ohlc_data, "color": {"up": "#00ff00", "down": "#ff0000", "unchanged": "#888888"}},
-                    {"type": "line", "label": "EMA 20", "data": ema_data, "borderColor": "#d4af37", "borderWidth": 2, "fill": False, "pointRadius": 0}
+                    {
+                        "label": "Price",
+                        "data": ohlc_data
+                    },
+                    {
+                        "type": "line",
+                        "label": "EMA 20",
+                        "data": ema_dataset,
+                        "borderColor": "#d4af37",
+                        "borderWidth": 2,
+                        "fill": False,
+                        "pointRadius": 0
+                    }
                 ]
             },
-            "options": {"plugins": {"legend": {"display": False}}}
+            "options": {
+                "plugins": {"legend": {"display": False}},
+                "scales": {
+                    "x": {"type": "category"},
+                    "y": {"type": "linear"}
+                }
+            }
         }
         encoded_config = urllib.parse.quote(json.dumps(chart_config))
-        chart_url = f"https://quickchart.io/chart?c={encoded_config}&w=800&h=450&bkg=%23111111"
+        chart_url = f"https://quickchart.io/chart?c={encoded_config}&w=800&h=400&bkg=%23111111"
         
         try:
-            # دانلود عکس از سایت و ارسال به عنوان فایل به تلگرام (رفع مشکل خطای ارسال)
             img_data = requests.get(chart_url, timeout=15).content
             buf = io.BytesIO(img_data)
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}")
         except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در دانلود نمودار. متن تحلیل بالا ارسال شد.")
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در دریافت نمودار. متن تحلیل ارسال شد.")
 
-# --- هشدارها ---
+# ... (بقیه کدهای هشدار، طلا، ارز و مدیریت متن‌ها دقیقاً مثل قبل است) ...
+
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [
@@ -403,7 +426,6 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         user_state[chat_id] = {}
         await query.edit_message_text("لغو شد.")
 
-# --- طلا، ارز و نفت ---
 async def gold_forex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌های جهانی...")
@@ -416,7 +438,6 @@ async def gold_forex(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def about_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👨‍💻 <b>صادق دوستی‌خواه</b>\n📧 <code>S.doostikhah@gmail.com</code>", parse_mode='HTML')
 
-# --- مدیریت متن‌ها ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     up = txt.upper()
@@ -449,7 +470,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("۳۰ دقیقه", callback_data="tf_30m"), InlineKeyboardButton("۱ ساعته", callback_data="tf_1H"), InlineKeyboardButton("۴ ساعته", callback_data="tf_4H")],
             [InlineKeyboardButton("روزانه", callback_data="tf_1D")]
         ]
-        return await update.message.reply_text(f"ارز {up} انتخاب شد. تایم‌فریم مورد نظر برای نمودار و تحلیل:", reply_markup=InlineKeyboardMarkup(kb))
+        return await update.message.reply_text(f"ارز {up} انتخاب شد. تایم‌فریم مورد نظر:", reply_markup=InlineKeyboardMarkup(kb))
 
     if state.get('step') == 'type_coin':
         data_price = fetch_prices().get(up) or get_okx(up)

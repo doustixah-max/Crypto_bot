@@ -36,8 +36,7 @@ def fetch_prices():
             for sym, data in res['result']['symbols'].items():
                 if sym.endswith("USDT"):
                     prices[sym.replace("USDT", "")] = {
-                        'price': float(data['stats']['lastPrice']), 
-                        'change': float(data['stats']['priceChangePercent'])
+                        'price': float(data['stats']['lastPrice'])
                     }
     except: pass
     return prices
@@ -47,11 +46,22 @@ def get_okx(symbol):
         res = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}-USDT", timeout=8).json()
         if res.get('code') == '0' and res.get('data'):
             d = res['data'][0]
-            p = float(d['last'])
-            o = float(d['open24h'])
-            return {'price': p, 'change': ((p - o) / o) * 100 if o > 0 else 0}
+            return {'price': float(d['last'])}
     except: pass
     return None
+
+def get_tf_change(symbol, timeframe):
+    """محاسبه درصد تغییر در یک بازه زمانی خاص"""
+    try:
+        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit=2"
+        res = requests.get(url, timeout=8).json()
+        if res.get('code') == '0' and len(res.get('data', [])) >= 1:
+            # داده‌ها از جدید به قدیم هستند. دیتای آخر (ایندکس -1) قدیمی‌ترین کندل است
+            open_price = float(res['data'][-1][1]) # Open
+            current_price = float(res['data'][0][4]) # Close
+            return ((current_price - open_price) / open_price) * 100 if open_price > 0 else 0
+    except: pass
+    return 0
 
 def get_klines_dataframe(symbol, timeframe='1H', limit=50):
     try:
@@ -102,7 +112,7 @@ def calculate_indicators(df):
     results['bb_upper'] = sma + (2 * std)
     results['bb_lower'] = sma - (2 * std)
     
-    # 3. EMA (20) - محاسبه کل خط برای رسم در نمودار
+    # 3. EMA (20)
     multiplier = 2 / (20 + 1)
     ema_line = []
     ema = closes[0]
@@ -110,7 +120,7 @@ def calculate_indicators(df):
         ema = (price - ema) * multiplier + ema
         ema_line.append(ema)
     results['ema'] = ema_line[-1]
-    results['ema_line'] = ema_line # برای رسم در نمودار
+    results['ema_line'] = ema_line
     
     # 4. ADX (14)
     period_adx = 14
@@ -131,7 +141,6 @@ def calculate_indicators(df):
         minus_dms.append(minus_dm)
 
     if len(trs) >= period_adx:
-        # محاسبه میانگین متحرک ساده (SMA) برای TR و DM
         avg_tr = sum(trs[-period_adx:]) / period_adx
         avg_plus_dm = sum(plus_dms[-period_adx:]) / period_adx
         avg_minus_dm = sum(minus_dms[-period_adx:]) / period_adx
@@ -162,30 +171,48 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("سلام! 🚀\nبه ربات پیشرفته کریپتو خوش آمدید.\nیک گزینه انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-async def top10(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ در حال دریافت...")
-    prices = fetch_prices()
-    text = f"<b>📊 ۱۰ ارز برتر</b>\n🕒 {get_time_str()}\n\n"
-    for c in TOP_COINS:
-        d = prices.get(c) or get_okx(c)
-        if not d: continue
-        icon = "🟢" if d['change'] > 0 else "🔴"
-        text += f"<b>{c}</b> {icon}\n💰 قیمت: {format_price(d['price'])}\n📊 تغییر: {d['change']:+.2f}%\n━━━━━━━━━━━━━━━━━━\n"
-    await msg.edit_text(text, parse_mode='HTML')
+# --- لیست‌ها با انتخاب تایم‌فریم ---
+async def show_list_tf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, list_type):
+    kb = [
+        [InlineKeyboardButton("۱ دقیقه", callback_data=f"list_{list_type}_1m"), InlineKeyboardButton("۵ دقیقه", callback_data=f"list_{list_type}_5m")],
+        [InlineKeyboardButton("۱۵ دقیقه", callback_data=f"list_{list_type}_15m"), InlineKeyboardButton("۳۰ دقیقه", callback_data=f"list_{list_type}_30m")],
+        [InlineKeyboardButton("۱ ساعته", callback_data=f"list_{list_type}_1H"), InlineKeyboardButton("۴ ساعته", callback_data=f"list_{list_type}_4H")],
+        [InlineKeyboardButton("روزانه", callback_data=f"list_{list_type}_1D")]
+    ]
+    title = "۱۰ ارز برتر" if list_type == "top10" else "۱۰ ترند برتر"
+    await update.message.reply_text(f"⏱ لطفاً بازه زمانی مورد نظر برای نمایش تغییرات {title} را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ در حال دریافت...")
+async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    parts = data.split("_")
+    list_type = parts[1]
+    tf = parts[2]
+    
+    tf_labels = {'1m': '۱ دقیقه', '5m': '۵ دقیقه', '15m': '۱۵ دقیقه', '30m': '۳۰ دقیقه', '1H': '۱ ساعته', '4H': '۴ ساعته', '1D': 'روزانه'}
+    tf_fa = tf_labels.get(tf, tf)
+    
+    await query.edit_message_text(f"⏳ در حال دریافت اطلاعات ({tf_fa})...")
+    
     prices = fetch_prices()
-    text = f"<b>🔥 ۱۰ ترند برتر</b>\n🕒 {get_time_str()}\n\n"
+    coins_to_process = TOP_COINS if list_type == "top10" else TRENDING_COINS
+    title = "📊 ۱۰ ارز برتر" if list_type == "top10" else "🔥 ۱۰ ترند برتر"
+    
+    text = f"<b>{title}</b>\n🕒 {get_time_str()}\n⏱ <i>بازه زمانی تغییرات: {tf_fa}</i>\n\n"
+    
     cnt = 0
-    for c in TRENDING_COINS:
+    for c in coins_to_process:
         if cnt >= 10: break
         d = prices.get(c) or get_okx(c)
         if d:
             cnt += 1
-            icon = "🟢" if d['change'] > 0 else "🔴"
-            text += f"<b>{c}</b> {icon}\n💰 قیمت: {format_price(d['price'])}\n📊 تغییر: {d['change']:+.2f}%\n━━━━━━━━━━━━━━━━━━\n"
-    await msg.edit_text(text, parse_mode='HTML')
+            # محاسبه درصد تغییر در بازه انتخابی
+            change = get_tf_change(c, tf)
+            icon = "🟢" if change > 0 else "🔴"
+            text += f"<b>{c}</b> {icon}\n💰 قیمت لحظه‌ای: {format_price(d['price'])}\n📊 تغییر {tf_fa}: {change:+.2f}%\n━━━━━━━━━━━━━━━━━━\n"
+    
+    await query.edit_message_text(text, parse_mode='HTML')
 
 # --- تحلیل پیشرفته ---
 async def start_advanced_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,20 +264,20 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         if rsi < 30 or cp < ind['bb_lower'] or cp > ind['ema']: score += 1
         if rsi > 70 or cp > ind['bb_upper'] or cp < ind['ema']: score -= 1
         
-        if adx < 20: 
-            summary = "⚠️ <b>برآیند: بازار رِنج است.</b>\nسیگنال‌ها قابل اعتماد نیستند."
-        elif score >= 2: 
-            summary = "🟢 <b>برآیند: صعودی</b>"
-        elif score <= -2: 
-            summary = "🔴 <b>برآیند: نزولی</b>"
-        else: 
-            summary = "⚖️ <b>برآیند: خنثی</b>"
+        if adx < 20: summary = "⚠️ <b>برآیند: بازار رِنج است.</b>\nسیگنال‌ها قابل اعتماد نیستند."
+        elif score >= 2: summary = "🟢 <b>برآیند: صعودی</b>"
+        elif score <= -2: summary = "🔴 <b>برآیند: نزولی</b>"
+        else: summary = "⚖️ <b>برآیند: خنثی</b>"
+
+        # محاسبه تغییر قیمت در همان بازه
+        first_close = df['Close'].iloc[0]
+        change_in_tf = ((cp - first_close) / first_close) * 100 if first_close > 0 else 0
 
         text = (
             f"📈 <b>تحلیل جامع {coin}</b> ({tf_fa})\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>قیمت لحظه‌ای:</b> {format_price(cp)}\n"
-            f"📊 <b>تغییر ۲۴س:</b> {data_price['change']:+.2f}%\n"
+            f"📊 <b>تغییر در این بازه:</b> {change_in_tf:+.2f}%\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📉 <b>اندیکاتورها:</b>\n\n"
             f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
@@ -262,7 +289,7 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- رسم نمودار شمعی با خط EMA کامل ---
+        # --- رسم نمودار شمعی ---
         try:
             mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit')
             custom_style = mpf.make_mpf_style(
@@ -272,18 +299,14 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
                 edgecolor="#888888", gridcolor="#333333",
                 rc={"axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"}
             )
-            
-            # رسم خط EMA به صورت کامل (از ابتدا)
             ap = mpf.make_addplot(ind['ema_line'], color='gold', width=1.5, label='EMA 20')
-            
             buf = io.BytesIO()
             mpf.plot(df, type='candle', style=custom_style, addplot=ap, savefig=buf, figsize=(10, 6), tight_layout=True)
             buf.seek(0)
-            plt.close('all') # پاکسازی حافظه
-            
+            plt.close('all')
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}\n🟡 خط طلایی: EMA 20")
-        except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار.")
+        except Exception:
+            pass
 
 # --- هشدارها ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -315,11 +338,42 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
     elif data == "view_alerts":
         alerts = user_alerts.get(chat_id, [])
-        if not alerts: return await query.edit_message_text("هشداری ندارید.")
-        text = "📋 <b>هشدارهای شما:</b>\n\n"
+        if not alerts: return await query.edit_message_text("شما هیچ هشدار فعالی ندارید.")
+        text = "📋 <b>هشدارهای فعال شما:</b>\n\n"
+        kb = []
         for i, a in enumerate(alerts):
-            text += f"🔸 {a['symbol']} | قیمت: {format_price(a['target'])}\n"
-        await query.edit_message_text(text, parse_mode='HTML')
+            type_fa = "قیمت" if a.get('type', 'price') == 'price' else "درصد"
+            dir_fa = "بالاتر" if a.get('direction', 'above') == 'above' else "پایین‌تر"
+            target_str = format_price(a['target']) if a.get('type') == 'price' else f"{a['target']}%"
+            text += f"🔸 <b>{a['symbol']}</b> | {type_fa} {dir_fa} از {target_str}\n"
+            kb.append([
+                InlineKeyboardButton(f"✏️ ویرایش {a['symbol']}", callback_data=f"edit_alert_{i}"),
+                InlineKeyboardButton(f"❌ لغو {a['symbol']}", callback_data=f"del_alert_{i}")
+            ])
+        kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_alerts")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+
+    elif data.startswith("del_alert_"):
+        idx = int(data.replace("del_alert_", ""))
+        if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
+            removed = user_alerts[chat_id].pop(idx)
+            await query.edit_message_text(f"✅ هشدار {removed['symbol']} با موفقیت لغو شد.")
+            if not user_alerts[chat_id]: del user_alerts[chat_id]
+            await show_alerts_menu(query, context)
+
+    elif data.startswith("edit_alert_"):
+        idx = int(data.replace("edit_alert_", ""))
+        if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
+            alert = user_alerts[chat_id][idx]
+            user_state[chat_id] = {
+                'step': 'edit_target', 'alert_idx': idx, 'symbol': alert['symbol'], 
+                'type': alert.get('type', 'price'), 'direction': alert.get('direction', 'above')
+            }
+            unit = "$" if alert.get('type') == 'price' else "%"
+            await query.edit_message_text(f"ویرایش هشدار {alert['symbol']}.\nلطفاً **عدد جدید** هدف را وارد کنید (به {unit}):", parse_mode='HTML')
+
+    elif data == "back_to_alerts":
+        await show_alerts_menu(query, context)
 
     elif data == "alert_other":
         user_state[chat_id] = {'step': 'type_coin'}
@@ -385,9 +439,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[chat_id] = {}
         return await update.message.reply_text("منو ریست شد. /start را بزنید.")
     elif "۱۰ ارز برتر" in txt: 
-        user_state[chat_id] = {}; await top10(update, context); return
+        user_state[chat_id] = {}
+        await show_list_tf_menu(update, context, "top10")
+        return
     elif "ترند" in txt: 
-        user_state[chat_id] = {}; await trending(update, context); return
+        user_state[chat_id] = {}
+        await show_list_tf_menu(update, context, "trend")
+        return
     elif "تحلیل" in txt: 
         user_state[chat_id] = {}; await start_advanced_analysis(update, context); return
     elif "هشدار" in txt: 
@@ -422,6 +480,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state.get('step') in ['enter_target', 'edit_target']:
         try:
             target = float(txt)
+            
+            if state.get('step') == 'edit_target':
+                idx = state['alert_idx']
+                if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
+                    user_alerts[chat_id][idx]['target'] = target
+                    symbol = user_alerts[chat_id][idx]['symbol']
+                    await update.message.reply_text(f"✅ هشدار {symbol} با موفقیت ویرایش شد. هدف جدید: {format_price(target) if user_alerts[chat_id][idx]['type']=='price' else str(target)+'%'}")
+                user_state[chat_id] = {}
+                return
+
             symbol = state['symbol']
             direction = state.get('direction', 'above')
             alert_type = state.get('type', 'price')
@@ -453,7 +521,8 @@ if __name__ == '__main__':
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_analysis_callback, pattern="^tf_"))
-    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|type_|dir_|alert_cancel)"))
+    app.add_handler(CallbackQueryHandler(handle_list_callback, pattern="^list_"))
+    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|type_|dir_|edit_alert_|del_alert_|back_to_alerts|alert_cancel)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     print("✅ ربات روشن شد!")

@@ -3,7 +3,6 @@ import requests
 import datetime
 import jdatetime
 import io
-import asyncio
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -52,21 +51,16 @@ def get_okx(symbol):
     return None
 
 def get_tf_data(symbol, timeframe):
-    """دریافت درصد تغییر و درصد نوسان در بازه زمانی مشخص"""
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit=24"
         res = requests.get(url, timeout=8).json()
         if res.get('code') == '0' and len(res.get('data', [])) >= 1:
-            # داده‌ها از جدید به قدیم هستند
-            open_price = float(res['data'][-1][1]) # Open اولین کندل بازه
-            current_price = float(res['data'][0][4]) # Close آخرین کندل
-            
+            open_price = float(res['data'][-1][1])
+            current_price = float(res['data'][0][4])
             highs = [float(c[2]) for c in res['data']]
             lows = [float(c[3]) for c in res['data']]
-            
             change_pct = ((current_price - open_price) / open_price) * 100 if open_price > 0 else 0
             volatility_pct = ((max(highs) - min(lows)) / open_price) * 100 if open_price > 0 else 0
-            
             return change_pct, volatility_pct
     except: pass
     return 0, 0
@@ -81,12 +75,8 @@ def get_klines_dataframe(symbol, timeframe='1H', limit=50):
                 ts = int(c[0])
                 dt = datetime.datetime.fromtimestamp(ts/1000)
                 data.append({
-                    "Date": dt,
-                    "Open": float(c[1]),
-                    "High": float(c[2]),
-                    "Low": float(c[3]),
-                    "Close": float(c[4]),
-                    "Volume": float(c[5])
+                    "Date": dt, "Open": float(c[1]), "High": float(c[2]),
+                    "Low": float(c[3]), "Close": float(c[4]), "Volume": float(c[5])
                 })
             df = pd.DataFrame(data)
             df.set_index('Date', inplace=True)
@@ -97,12 +87,11 @@ def get_klines_dataframe(symbol, timeframe='1H', limit=50):
 def calculate_indicators(df):
     if len(df) < 20: return None
     results = {}
-    
     closes = df['Close'].tolist()
     highs = df['High'].tolist()
     lows = df['Low'].tolist()
     
-    # RSI (14)
+    # RSI
     period_rsi = 14
     gains, losses = 0, 0
     for i in range(len(closes) - period_rsi, len(closes)):
@@ -112,7 +101,7 @@ def calculate_indicators(df):
     rs = (gains / period_rsi) / (losses / period_rsi) if losses > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # Bollinger Bands (20, 2)
+    # Bollinger
     recent = closes[-20:]
     sma = sum(recent) / 20
     variance = sum((x - sma) ** 2 for x in recent) / 20
@@ -120,7 +109,7 @@ def calculate_indicators(df):
     results['bb_upper'] = sma + (2 * std)
     results['bb_lower'] = sma - (2 * std)
     
-    # EMA (20)
+    # EMA
     multiplier = 2 / (20 + 1)
     ema_line = []
     ema = closes[0]
@@ -130,72 +119,58 @@ def calculate_indicators(df):
     results['ema'] = ema_line[-1]
     results['ema_line'] = ema_line
     
-    # ADX (14)
-    period_adx = 14
+    # ADX
     trs, plus_dms, minus_dms = [], [], []
     for i in range(1, len(df)):
         h, l, prev_c = highs[i], lows[i], closes[i-1]
         prev_h, prev_l = highs[i-1], lows[i-1]
-        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-        trs.append(tr)
-        up_move = h - prev_h
-        down_move = prev_l - l
-        plus_dm = up_move if (up_move > down_move and up_move > 0) else 0
-        minus_dm = down_move if (down_move > up_move and down_move > 0) else 0
-        plus_dms.append(plus_dm)
-        minus_dms.append(minus_dm)
+        trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+        up_move, down_move = h - prev_h, prev_l - l
+        plus_dms.append(up_move if (up_move > down_move and up_move > 0) else 0)
+        minus_dms.append(down_move if (down_move > up_move and down_move > 0) else 0)
 
-    if len(trs) >= period_adx:
-        avg_tr = sum(trs[-period_adx:]) / period_adx
-        avg_plus_dm = sum(plus_dms[-period_adx:]) / period_adx
-        avg_minus_dm = sum(minus_dms[-period_adx:]) / period_adx
-        plus_di = (avg_plus_dm / avg_tr) * 100 if avg_tr > 0 else 0
-        minus_di = (avg_minus_dm / avg_tr) * 100 if avg_tr > 0 else 0
+    if len(trs) >= 14:
+        avg_tr = sum(trs[-14:]) / 14
+        plus_di = (sum(plus_dms[-14:]) / 14 / avg_tr) * 100 if avg_tr > 0 else 0
+        minus_di = (sum(minus_dms[-14:]) / 14 / avg_tr) * 100 if avg_tr > 0 else 0
         dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100 if (plus_di + minus_di) > 0 else 0
         results['adx'] = round(dx, 2)
     else:
         results['adx'] = 0
-        
     return results
 
-# --- بررسی هشدارهای پس‌زمینه ---
-async def check_alerts_background():
-    while True:
-        await asyncio.sleep(300) # هر 5 دقیقه
-        if not user_alerts: continue
-        
-        prices = fetch_prices()
-        for chat_id, alerts in list(user_alerts.items()):
-            for a in alerts[:]:
-                sym = a['symbol']
-                d = prices.get(sym) or get_okx(sym)
-                if not d: continue
-                cp = d['price']
-                
-                triggered = False
-                # هشدار قیمت
-                if a.get('type') == 'price':
-                    if (a['direction'] == 'above' and cp >= a['target']) or (a['direction'] == 'below' and cp <= a['target']):
-                        triggered = True
-                # هشدار درصد
-                elif a.get('type') == 'percent':
-                    change, _ = get_tf_data(sym, '1H') # بررسی در 1 ساعت اخیر
-                    if (a['direction'] == 'above' and change >= a['target']) or (a['direction'] == 'below' and change <= -a['target']):
-                        triggered = True
-                # هشدار نوسان
-                elif a.get('type') == 'volatility':
-                    _, vol = get_tf_data(sym, '1H')
-                    if vol >= a['target']:
-                        triggered = True
+# --- هشدارهای پس‌زمینه (با استفاده از JobQueue) ---
+async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
+    if not user_alerts: return
+    prices = fetch_prices()
+    for chat_id, alerts in list(user_alerts.items()):
+        for a in alerts[:]:
+            sym = a['symbol']
+            d = prices.get(sym) or get_okx(sym)
+            if not d: continue
+            cp = d['price']
+            
+            triggered = False
+            if a.get('type') == 'price':
+                if (a['direction'] == 'above' and cp >= a['target']) or (a['direction'] == 'below' and cp <= a['target']):
+                    triggered = True
+            elif a.get('type') == 'percent':
+                change, _ = get_tf_data(sym, '1H')
+                if (a['direction'] == 'above' and change >= a['target']) or (a['direction'] == 'below' and change <= -a['target']):
+                    triggered = True
+            elif a.get('type') == 'volatility':
+                _, vol = get_tf_data(sym, '1H')
+                if vol >= a['target']:
+                    triggered = True
 
-                if triggered:
-                    msg = f"🚨 <b>هشدار {sym}</b>\n\nشرط شما برآورده شد!\n💰 قیمت فعلی: {format_price(cp)}"
-                    try:
-                        app.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                    except: pass
-                    user_alerts[chat_id].remove(a)
-            if chat_id in user_alerts and not user_alerts[chat_id]:
-                del user_alerts[chat_id]
+            if triggered:
+                msg = f"🚨 <b>هشدار {sym}</b>\n\nشرط شما برآورده شد!\n💰 قیمت فعلی: {format_price(cp)}"
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                except: pass
+                user_alerts[chat_id].remove(a)
+        if chat_id in user_alerts and not user_alerts[chat_id]:
+            del user_alerts[chat_id]
 
 # --- منوها ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -224,18 +199,14 @@ async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     data = query.data
     parts = data.split("_")
-    list_type = parts[1]
-    tf = parts[2]
-    
+    list_type, tf = parts[1], parts[2]
     tf_labels = {'1m': '۱ دقیقه', '5m': '۵ دقیقه', '15m': '۱۵ دقیقه', '30m': '۳۰ دقیقه', '1H': '۱ ساعته', '4H': '۴ ساعته', '1D': 'روزانه'}
     tf_fa = tf_labels.get(tf, tf)
     
     await query.edit_message_text(f"⏳ در حال دریافت اطلاعات ({tf_fa})...")
-    
     prices = fetch_prices()
     coins_to_process = TOP_COINS if list_type == "top10" else TRENDING_COINS
     title = "📊 ۱۰ ارز برتر" if list_type == "top10" else "🔥 ۱۰ ترند برتر"
-    
     text = f"<b>{title}</b>\n🕒 {get_time_str()}\n⏱ <i>بازه: {tf_fa}</i>\n\n"
     
     cnt = 0
@@ -247,7 +218,6 @@ async def handle_list_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             change, vol = get_tf_data(c, tf)
             icon = "🟢" if change > 0 else "🔴"
             text += f"<b>{c}</b> {icon}\n💰 قیمت: {format_price(d['price'])}\n📊 تغییر: {change:+.2f}%\n🌊 نوسان: {vol:.2f}%\n━━━━━━━━━━━━━━━━━━\n"
-    
     await query.edit_message_text(text, parse_mode='HTML')
 
 # --- تحلیل پیشرفته ---
@@ -274,7 +244,6 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         tf_fa = tf_labels.get(timeframe, timeframe)
         
         await query.edit_message_text(f"⏳ در حال رسم نمودار شمعی {coin} ({tf_fa})...")
-        
         df = get_klines_dataframe(coin, okx_tf, 40)
         if df is None or df.empty: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
@@ -283,17 +252,10 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         cp = data_price['price']
         
         rsi = ind['rsi']
-        if rsi > 70: rsi_txt = f"⚠️ اشباع خرید ({rsi})"
-        elif rsi < 30: rsi_txt = f"🟢 اشباع فروش ({rsi})"
-        else: rsi_txt = f"⚖️ خنثی ({rsi})"
-        
+        rsi_txt = f"⚠️ اشباع خرید ({rsi})" if rsi > 70 else (f"🟢 اشباع فروش ({rsi})" if rsi < 30 else f"⚖️ خنثی ({rsi})")
         bb_txt = "🔴 بالاتر از سقف" if cp > ind['bb_upper'] else ("🟢 پایین‌تر از کف" if cp < ind['bb_lower'] else "⚖️ داخل باندها")
         ema_txt = "🟢 بالای EMA" if cp > ind['ema'] else "🔴 زیر EMA"
-        
-        adx = ind['adx']
-        if adx > 25: adx_txt = f"💪 روند قوی ({adx})"
-        elif adx < 20: adx_txt = f"🔀 بازار رِنج ({adx})"
-        else: adx_txt = f"⚖️ شکل‌گیری روند ({adx})"
+        adx_txt = f"💪 روند قوی ({ind['adx']})" if ind['adx'] > 25 else (f"🔀 بازار رِنج ({ind['adx']})" if ind['adx'] < 20 else f"⚖️ شکل‌گیری روند ({ind['adx']})")
         
         first_close = df['Close'].iloc[0]
         change_in_tf = ((cp - first_close) / first_close) * 100 if first_close > 0 else 0
@@ -306,11 +268,10 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
             f"📊 <b>تغییر بازه:</b> {change_in_tf:+.2f}%\n"
             f"🌊 <b>نوسان بازه:</b> {vol_in_tf:.2f}%\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📉 <b>اندیکاتورها:</b>\n\n"
-            f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
-            f"2️⃣ <b>بولینگر:</b>\n   {bb_txt}\n\n"
-            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n\n"
-            f"4️⃣ <b>ADX:</b>\n   {adx_txt}\n"
+            f"1️⃣ <b>RSI:</b> {rsi_txt}\n"
+            f"2️⃣ <b>بولینگر:</b> {bb_txt}\n"
+            f"3️⃣ <b>EMA:</b> {ema_txt}\n"
+            f"4️⃣ <b>ADX:</b> {adx_txt}\n"
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
@@ -446,20 +407,19 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("لغو شد.")
 
 async def gold_forex(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # گسترش شاخص‌های جهانی
     text = (
         "🌍 <b>شاخص‌های بازارهای جهانی</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "🥇 <b>انس جهانی طلا (XAU):</b> $2,350.50\n"
-        "🥈 <b>نقره (XAG):</b> $28.40\n"
+        "🥇 <b>انس جهانی طلا:</b> $2,350.50\n"
+        "🥈 <b>نقره:</b> $28.40\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "🛢 <b>نفت برنت:</b> $82.30\n"
         "🛢 <b>نفت WTI:</b> $78.10\n"
         "⛽ <b>گاز طبیعی:</b> $2.15\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "📈 <b>شاخص دلار (DXY):</b> 104.50\n"
-        "📉 <b>نزدک (Nasdaq):</b> 18,200\n"
-        "📊 <b>داوجونز (Dow):</b> 39,100"
+        "📈 <b>شاخص دلار:</b> 104.50\n"
+        "📉 <b>نزدک:</b> 18,200\n"
+        "📊 <b>داوجونز:</b> 39,100"
     )
     await update.message.reply_text(text, parse_mode='HTML')
 
@@ -512,7 +472,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state.get('step') in ['enter_target', 'edit_target']:
         try:
             target = float(txt)
-            
             if state.get('step') == 'edit_target':
                 idx = state['alert_idx']
                 if chat_id in user_alerts and idx < len(user_alerts[chat_id]):
@@ -547,15 +506,15 @@ if __name__ == '__main__':
     request = HTTPXRequest(connect_timeout=15.0, read_timeout=15.0)
     app = ApplicationBuilder().token(TOKEN).request(request).build()
     
+    # تنظیم JobQueue برای هشدارهای پس‌زمینه
+    job_queue = app.job_queue
+    job_queue.run_repeating(check_alerts_job, interval=300, first=10)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_analysis_callback, pattern="^tf_"))
     app.add_handler(CallbackQueryHandler(handle_list_callback, pattern="^list_"))
     app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^(new_alert|view_alerts|alert_other|alertcoin_|type_|dir_|edit_alert_|del_alert_|back_to_alerts|alert_cancel)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # اجرای تسک پس‌زمینه برای هشدارها
-    loop = asyncio.get_event_loop()
-    loop.create_task(check_alerts_background())
     
     print("✅ ربات روشن شد!")
     app.run_polling(drop_pending_updates=True)

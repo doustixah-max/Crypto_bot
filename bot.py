@@ -2,8 +2,12 @@ import os
 import requests
 import datetime
 import jdatetime
-import json
-import urllib.parse
+import io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
+import mplfinance as mpf
 import yfinance as yf
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -137,7 +141,7 @@ def get_tf_data(symbol, timeframe):
     except: pass
     return 0, 0
 
-def get_klines_data(symbol, timeframe='1H', limit=40):
+def get_klines_dataframe(symbol, timeframe='1H', limit=40):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=5).json()
@@ -145,22 +149,24 @@ def get_klines_data(symbol, timeframe='1H', limit=40):
             data = []
             for c in reversed(res['data']):
                 ts = int(c[0])
-                dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                dt = datetime.datetime.fromtimestamp(ts/1000)
                 data.append({
-                    "x": dt,
-                    "o": float(c[1]), "h": float(c[2]),
-                    "l": float(c[3]), "c": float(c[4])
+                    "Date": dt,
+                    "Open": float(c[1]), "High": float(c[2]),
+                    "Low": float(c[3]), "Close": float(c[4]), "Volume": float(c[5])
                 })
-            return data
+            df = pd.DataFrame(data)
+            df.set_index('Date', inplace=True)
+            return df
     except: pass
-    return []
+    return None
 
-def calculate_indicators(data):
-    if len(data) < 20: return None
+def calculate_indicators(df):
+    if len(df) < 20: return None
     results = {}
-    closes = [d['c'] for d in data]
-    highs = [d['h'] for d in data]
-    lows = [d['l'] for d in data]
+    closes = df['Close'].tolist()
+    highs = df['High'].tolist()
+    lows = df['Low'].tolist()
     
     gains, losses = 0, 0
     for i in range(len(closes) - 14, len(closes)):
@@ -178,14 +184,15 @@ def calculate_indicators(data):
     results['bb_lower'] = sma - (2 * std)
     
     multiplier = 2 / (20 + 1)
-    ema, ema_line = closes[0], []
+    ema_line, ema = [], closes[0]
     for price in closes:
         ema = (price - ema) * multiplier + ema
         ema_line.append(ema)
     results['ema'] = ema_line[-1]
+    results['ema_line'] = ema_line
     
     trs, plus_dms, minus_dms = [], [], []
-    for i in range(1, len(data)):
+    for i in range(1, len(df)):
         h, l, prev_c = highs[i], lows[i], closes[i-1]
         prev_h, prev_l = highs[i-1], lows[i-1]
         trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
@@ -326,12 +333,12 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(t['loading'])
         
-        data_ohlc = get_klines_data(coin, okx_tf, limit)
-        if not data_ohlc: return await query.edit_message_text(t['error_data'])
+        df = get_klines_dataframe(coin, okx_tf, limit)
+        if df is None or df.empty: return await query.edit_message_text(t['error_data'])
         
-        ind = calculate_indicators(data_ohlc)
-        cp = data_ohlc[-1]['c']
-        change_in_tf = ((cp - data_ohlc[0]['c']) / data_ohlc[0]['c']) * 100 if data_ohlc[0]['c'] > 0 else 0
+        ind = calculate_indicators(df)
+        cp = df['Close'].iloc[-1]
+        change_in_tf = ((cp - df['Close'].iloc[0]) / df['Close'].iloc[0]) * 100 if df['Close'].iloc[0] > 0 else 0
         
         rsi = ind['rsi']
         if rsi > 70: rsi_txt = f"⚠️ {t['overbought']} ({rsi})"
@@ -362,65 +369,16 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # سیستم فوق‌العاده مقاوم برای رسم نمودار شمعی
         try:
-            unit = 'hour' if okx_tf in ['1H', '4H'] else ('day' if okx_tf == '1D' else 'minute')
-            
-            chart_config = {
-                "type": "candlestick",
-                "data": {
-                    "datasets": [{
-                        "label": coin,
-                        "data": data_ohlc # استفاده مستقیم از فرمت آبجکت {x,o,h,l,c}
-                    }]
-                },
-                "options": {
-                    "parsing": False, # بسیار مهم: جلوگیری از خطای n=4
-                    "scales": {
-                        "x": {
-                            "type": "time",
-                            "time": {"unit": unit}
-                        }
-                    },
-                    "plugins": {"legend": {"display": False}}
-                }
-            }
-            encoded = urllib.parse.quote(json.dumps(chart_config))
-            chart_url = f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bkg=%23111111"
-            
-            img_resp = requests.get(chart_url, timeout=10)
-            
-            # تشخیص خطا: اگر پاسخ از نوع عکس نبود یا حجمش خیلی کم بود (عکس خطای سفید)
-            if 'image' not in img_resp.headers.get('Content-Type', '') or len(img_resp.content) < 5000:
-                raise Exception("Invalid Chart Image")
-                
-            await context.bot.send_photo(chat_id=chat_id, photo=img_resp.content, caption=f"📊 {coin} - {tf_fa}")
-            
-        except Exception:
-            # جایگزین (Fallback): اگر شمعی خطا داد، نمودار خطی سبز بفرست
-            try:
-                line_config = {
-                    "type": "line",
-                    "data": {
-                        "labels": [d['x'] for d in data_ohlc],
-                        "datasets": [{
-                            "label": coin,
-                            "data": [d['c'] for d in data_ohlc],
-                            "borderColor": "#00ff00",
-                            "backgroundColor": "rgba(0, 255, 0, 0.1)",
-                            "fill": True,
-                            "borderWidth": 2,
-                            "pointRadius": 0
-                        }]
-                    },
-                    "options": {"plugins": {"legend": {"display": False}}}
-                }
-                line_encoded = urllib.parse.quote(json.dumps(line_config))
-                line_url = f"https://quickchart.io/chart?c={line_encoded}&w=800&h=400&bkg=%23111111"
-                line_img = requests.get(line_url, timeout=10).content
-                await context.bot.send_photo(chat_id=chat_id, photo=line_img, caption=f"📊 نمودار روند {coin} - {tf_fa}")
-            except:
-                pass
+            mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit')
+            custom_style = mpf.make_mpf_style(base_mpl_style="dark_background", marketcolors=mc, facecolor="#111111", figcolor="#111111", edgecolor="#888888", gridcolor="#333333", rc={"axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
+            ap = mpf.make_addplot(ind['ema_line'], color='gold', width=1.5)
+            buf = io.BytesIO()
+            mpf.plot(df, type='candle', style=custom_style, addplot=ap, savefig=buf, figsize=(10, 6), tight_layout=True)
+            buf.seek(0)
+            plt.close('all')
+            await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 {coin} - {tf_fa}")
+        except Exception: pass
 
 async def show_global_markets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = TEXTS[get_lang(update.effective_chat.id)]

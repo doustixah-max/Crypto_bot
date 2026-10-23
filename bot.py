@@ -334,7 +334,20 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(t['loading'])
         
         df = get_klines_dataframe(coin, okx_tf, limit)
-        if df is None or df.empty: return await query.edit_message_text(t['error_data'])
+        
+        # --- سیستم جایگزین (Fallback) برای ارزهایی که داده تاریخی ندارند ---
+        if df is None or df.empty:
+            stats = get_okx_stats(coin)
+            if stats:
+                msg = (
+                    f"⚠️ ارز <b>{coin}</b> برای تحلیل تکنیکال در این تایم‌فریم داده کافی ندارد.\n\n"
+                    f"💰 {t['price']}: <code>{format_price(stats['price'])}</code>\n"
+                    f"🌊 {t['vol']} 24h: <code>{stats['vol_24h']:.2f}%</code>"
+                )
+                return await query.edit_message_text(msg, parse_mode='HTML')
+            else:
+                return await query.edit_message_text(t['error_data'])
+        # ---------------------------------------------------------------------
         
         ind = calculate_indicators(df)
         cp = df['Close'].iloc[-1]

@@ -3,7 +3,4 @@ requests
 jdatetime
 staypresent[prod]
 httpx
-mplfinance
-pandas
-matplotlib
 yfinance

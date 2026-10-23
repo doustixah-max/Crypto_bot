@@ -4,7 +4,7 @@ import datetime
 import jdatetime
 import io
 import matplotlib
-matplotlib.use('Agg') # استفاده از بک‌اند غیرگرافیکی برای جلوگیری از کرش
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pandas as pd
 import mplfinance as mpf
@@ -53,8 +53,7 @@ def get_okx(symbol):
     except: pass
     return None
 
-def get_klines_dataframe(symbol, timeframe='1H', limit=40):
-    """دریافت داده‌ها برای mplfinance"""
+def get_klines_dataframe(symbol, timeframe='1H', limit=50):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT&bar={timeframe}&limit={limit}"
         res = requests.get(url, timeout=8).json()
@@ -77,28 +76,25 @@ def get_klines_dataframe(symbol, timeframe='1H', limit=40):
     except: pass
     return None
 
-def calculate_indicators(closes):
-    if len(closes) < 20: return None
+def calculate_indicators(df):
+    if len(df) < 20: return None
     results = {}
     
-    # RSI
-    period = 14
+    closes = df['Close'].tolist()
+    highs = df['High'].tolist()
+    lows = df['Low'].tolist()
+    
+    # 1. RSI (14)
+    period_rsi = 14
     gains, losses = 0, 0
-    for i in range(len(closes) - period, len(closes)):
+    for i in range(len(closes) - period_rsi, len(closes)):
         diff = closes[i] - closes[i-1]
         if diff > 0: gains += diff
         else: losses -= diff
-    rs = (gains / period) / (losses / period) if losses > 0 else 100
+    rs = (gains / period_rsi) / (losses / period_rsi) if losses > 0 else 100
     results['rsi'] = round(100 - (100 / (1 + rs)), 2)
     
-    # EMA 20
-    multiplier = 2 / (20 + 1)
-    ema = closes[0]
-    for price in closes[1:]:
-        ema = (price - ema) * multiplier + ema
-    results['ema'] = ema
-    
-    # Bollinger
+    # 2. Bollinger Bands (20, 2)
     recent = closes[-20:]
     sma = sum(recent) / 20
     variance = sum((x - sma) ** 2 for x in recent) / 20
@@ -106,6 +102,52 @@ def calculate_indicators(closes):
     results['bb_upper'] = sma + (2 * std)
     results['bb_lower'] = sma - (2 * std)
     
+    # 3. EMA (20) - محاسبه کل خط برای رسم در نمودار
+    multiplier = 2 / (20 + 1)
+    ema_line = []
+    ema = closes[0]
+    for price in closes:
+        ema = (price - ema) * multiplier + ema
+        ema_line.append(ema)
+    results['ema'] = ema_line[-1]
+    results['ema_line'] = ema_line # برای رسم در نمودار
+    
+    # 4. ADX (14)
+    period_adx = 14
+    trs, plus_dms, minus_dms = [], [], []
+    for i in range(1, len(df)):
+        h, l, prev_c = highs[i], lows[i], closes[i-1]
+        prev_h, prev_l = highs[i-1], lows[i-1]
+        
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        trs.append(tr)
+        
+        up_move = h - prev_h
+        down_move = prev_l - l
+        
+        plus_dm = up_move if (up_move > down_move and up_move > 0) else 0
+        minus_dm = down_move if (down_move > up_move and down_move > 0) else 0
+        plus_dms.append(plus_dm)
+        minus_dms.append(minus_dm)
+
+    if len(trs) >= period_adx:
+        # محاسبه میانگین متحرک ساده (SMA) برای TR و DM
+        avg_tr = sum(trs[-period_adx:]) / period_adx
+        avg_plus_dm = sum(plus_dms[-period_adx:]) / period_adx
+        avg_minus_dm = sum(minus_dms[-period_adx:]) / period_adx
+        
+        plus_di = (avg_plus_dm / avg_tr) * 100 if avg_tr > 0 else 0
+        minus_di = (avg_minus_dm / avg_tr) * 100 if avg_tr > 0 else 0
+        
+        dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100 if (plus_di + minus_di) > 0 else 0
+        results['adx'] = round(dx, 2)
+        results['plus_di'] = plus_di
+        results['minus_di'] = minus_di
+    else:
+        results['adx'] = 0
+        results['plus_di'] = 0
+        results['minus_di'] = 0
+        
     return results
 
 # --- منوها ---
@@ -170,11 +212,10 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(f"⏳ در حال رسم نمودار شمعی {coin} ({tf_fa})...")
         
-        df = get_klines_dataframe(coin, okx_tf, 30) # کاهش به 30 کندل برای مصرف کمتر رم
+        df = get_klines_dataframe(coin, okx_tf, 40)
         if df is None or df.empty: return await query.edit_message_text("❌ اطلاعات یافت نشد.")
         
-        closes = df['Close'].tolist()
-        ind = calculate_indicators(closes)
+        ind = calculate_indicators(df)
         data_price = fetch_prices().get(coin) or get_okx(coin)
         cp = data_price['price']
         
@@ -187,13 +228,23 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
         bb_txt = "🔴 بالاتر از سقف" if cp > ind['bb_upper'] else ("🟢 پایین‌تر از کف" if cp < ind['bb_lower'] else "⚖️ داخل باندها")
         ema_txt = "🟢 بالای EMA" if cp > ind['ema'] else "🔴 زیر EMA"
         
+        adx = ind['adx']
+        if adx > 25: adx_txt = f"💪 روند قوی ({adx})"
+        elif adx < 20: adx_txt = f"🔀 بازار رِنج ({adx})"
+        else: adx_txt = f"⚖️ شکل‌گیری روند ({adx})"
+        
         score = 0
         if rsi < 30 or cp < ind['bb_lower'] or cp > ind['ema']: score += 1
         if rsi > 70 or cp > ind['bb_upper'] or cp < ind['ema']: score -= 1
         
-        if score >= 2: summary = "🟢 <b>برآیند: صعودی</b>"
-        elif score <= -2: summary = "🔴 <b>برآیند: نزولی</b>"
-        else: summary = "⚖️ <b>برآیند: خنثی</b>"
+        if adx < 20: 
+            summary = "⚠️ <b>برآیند: بازار رِنج است.</b>\nسیگنال‌ها قابل اعتماد نیستند."
+        elif score >= 2: 
+            summary = "🟢 <b>برآیند: صعودی</b>"
+        elif score <= -2: 
+            summary = "🔴 <b>برآیند: نزولی</b>"
+        else: 
+            summary = "⚖️ <b>برآیند: خنثی</b>"
 
         text = (
             f"📈 <b>تحلیل جامع {coin}</b> ({tf_fa})\n"
@@ -204,43 +255,37 @@ async def handle_analysis_callback(update: Update, context: ContextTypes.DEFAULT
             f"📉 <b>اندیکاتورها:</b>\n\n"
             f"1️⃣ <b>RSI:</b>\n   {rsi_txt}\n\n"
             f"2️⃣ <b>بولینگر:</b>\n   {bb_txt}\n\n"
-            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n"
+            f"3️⃣ <b>EMA:</b>\n   {ema_txt}\n\n"
+            f"4️⃣ <b>ADX:</b>\n   {adx_txt}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🎯 {summary}"
         )
         await query.edit_message_text(text, parse_mode='HTML')
         
-        # --- رسم نمودار شمعی با mplfinance (با تنظیمات دقیق رنگ) ---
+        # --- رسم نمودار شمعی با خط EMA کامل ---
         try:
-            mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit', volume='in')
-            
+            mc = mpf.make_marketcolors(up='#00ff00', down='#ff0000', edge='inherit', wick='inherit')
             custom_style = mpf.make_mpf_style(
                 base_mpl_style="dark_background",
                 marketcolors=mc,
-                facecolor="#111111",
-                figcolor="#111111",
-                edgecolor="#888888",
-                gridcolor="#333333",
-                rc={
-                    "axes.labelcolor": "white",
-                    "xtick.color": "white",
-                    "ytick.color": "white"
-                }
+                facecolor="#111111", figcolor="#111111",
+                edgecolor="#888888", gridcolor="#333333",
+                rc={"axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"}
             )
             
-            buf = io.BytesIO()
-            # رسم نمودار شمعی با میانگین متحرک 20 (EMA)
-            mpf.plot(df, type='candle', mav=20, style=custom_style, savefig=buf, figsize=(10, 6), tight_layout=True)
-            buf.seek(0)
+            # رسم خط EMA به صورت کامل (از ابتدا)
+            ap = mpf.make_addplot(ind['ema_line'], color='gold', width=1.5, label='EMA 20')
             
-            # پاکسازی حافظه پس از رسم
-            plt.close('all')
+            buf = io.BytesIO()
+            mpf.plot(df, type='candle', style=custom_style, addplot=ap, savefig=buf, figsize=(10, 6), tight_layout=True)
+            buf.seek(0)
+            plt.close('all') # پاکسازی حافظه
             
             await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=f"📊 نمودار شمعی {coin} - {tf_fa}\n🟡 خط طلایی: EMA 20")
         except Exception as e:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار: {str(e)[:100]}")
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در رسم نمودار.")
 
-# --- هشدارها (کامل) ---
+# --- هشدارها ---
 async def show_alerts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     kb = [
